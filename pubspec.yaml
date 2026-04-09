@@ -1,0 +1,57 @@
+name: raitocorp_mobile
+description: "E-commerce de iluminação Raitõ Corp."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Estado
+  flutter_riverpod: ^2.6.1
+
+  # Navegação
+  go_router: ^14.6.2
+
+  # Tipografia
+  google_fonts: ^6.2.1
+
+  # Ícones
+  phosphor_flutter: ^2.1.0
+
+  # Imagens
+  cached_network_image: ^3.4.1
+
+  # Armazenamento local
+  shared_preferences: ^2.3.3
+  hive_flutter: ^1.1.0
+
+  # Animações
+  flutter_animate: ^4.5.0
+  shimmer: ^3.0.0
+
+  # Utilitários
+  intl: ^0.19.0
+  image_picker: ^1.1.2
+  equatable: ^2.0.7
+
+  # Login social
+  google_sign_in: ^6.2.1
+
+  # HTTP (ViaCEP)
+  http: ^1.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/

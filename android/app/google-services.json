@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "250510478199",
+    "project_id": "raitocorp-e46a7",
+    "storage_bucket": "raitocorp-e46a7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:250510478199:android:3144b6d5d3c7b426c2af72",
+        "android_client_info": {
+          "package_name": "com.example.raitocorp_mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "250510478199-ntvbpl5sffki90u4k0lk3eseal8u8t0m.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAwj2P96fxa1RojgILwREXcg5Kyo_L298Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "250510478199-ntvbpl5sffki90u4k0lk3eseal8u8t0m.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
