@@ -1,20 +1,28 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../data/consultant_repository.dart';
 import '../../domain/entities/message_entity.dart';
 
-class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
-  ConsultantNotifier() : super(_initial);
+/// Gera um session id por instância do app. Persistir em Hive é trivial
+/// se quisermos retomar conversas entre sessões; por ora vive em memória.
+final _sessionIdProvider = Provider<String>(
+  (_) => 'sess-${DateTime.now().millisecondsSinceEpoch}',
+);
 
-  static final _initial = <MessageEntity>[
-    MessageEntity(
-      id: 'welcome',
-      author: MessageAuthor.bot,
-      type: MessageType.text,
-      text:
-          'Olá! Sou o Consultor Raitõ. Manda uma foto do seu ambiente ou me conta o que precisa — a gente encontra a luz certa sem complicação.',
-      createdAt: DateTime.now(),
-    ),
-  ];
+class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
+  ConsultantNotifier(this._repo, this._sessionId) : super([_welcome()]);
+
+  final ConsultantRepository _repo;
+  final String _sessionId;
+
+  static MessageEntity _welcome() => MessageEntity(
+        id: 'welcome',
+        author: MessageAuthor.bot,
+        type: MessageType.text,
+        text:
+            'Olá! Sou o Consultor Raitõ. Manda uma foto do seu ambiente ou me conta o que precisa — a gente encontra a luz certa sem complicação.',
+        createdAt: DateTime.now(),
+      );
 
   Future<void> sendText(String text) async {
     if (text.trim().isEmpty) return;
@@ -26,18 +34,22 @@ class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
       createdAt: DateTime.now(),
     );
     state = [...state, userMsg];
-    await Future.delayed(const Duration(milliseconds: 800));
-    state = [
-      ...state,
-      MessageEntity(
-        id: '${DateTime.now().millisecondsSinceEpoch}_bot',
-        author: MessageAuthor.bot,
-        type: MessageType.text,
-        text:
-            'Entendi! Para esse tipo de ambiente eu recomendo começar com luz quente (3000K) e um bocal E27. Quer que eu mostre algumas opções?',
-        createdAt: DateTime.now(),
-      ),
-    ];
+
+    try {
+      final reply = await _repo.sendText(sessionId: _sessionId, text: text);
+      state = [...state, reply];
+    } catch (e) {
+      state = [
+        ...state,
+        MessageEntity(
+          id: '${DateTime.now().millisecondsSinceEpoch}_err',
+          author: MessageAuthor.bot,
+          type: MessageType.text,
+          text: 'Não consegui responder agora. Tente de novo em instantes.',
+          createdAt: DateTime.now(),
+        ),
+      ];
+    }
   }
 
   Future<void> sendImage(String path) async {
@@ -51,22 +63,30 @@ class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
         createdAt: DateTime.now(),
       ),
     ];
-    await Future.delayed(const Duration(milliseconds: 1200));
-    state = [
-      ...state,
-      MessageEntity(
-        id: '${DateTime.now().millisecondsSinceEpoch}_bot',
-        author: MessageAuthor.bot,
-        type: MessageType.text,
-        text:
-            'Analisei sua foto! Esse ambiente pede uma iluminação mais aconchegante. Dei uma olhada no nosso catálogo — o Pendente Moderno combinaria muito bem aí.',
-        createdAt: DateTime.now(),
-      ),
-    ];
+
+    try {
+      final reply =
+          await _repo.sendImage(sessionId: _sessionId, imagePath: path);
+      state = [...state, reply];
+    } catch (_) {
+      state = [
+        ...state,
+        MessageEntity(
+          id: '${DateTime.now().millisecondsSinceEpoch}_err',
+          author: MessageAuthor.bot,
+          type: MessageType.text,
+          text: 'Não consegui analisar a imagem agora.',
+          createdAt: DateTime.now(),
+        ),
+      ];
+    }
   }
 }
 
 final consultantProvider =
     StateNotifierProvider<ConsultantNotifier, List<MessageEntity>>((ref) {
-  return ConsultantNotifier();
+  return ConsultantNotifier(
+    ref.watch(consultantRepositoryProvider),
+    ref.watch(_sessionIdProvider),
+  );
 });

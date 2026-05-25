@@ -28,9 +28,8 @@ class NotificationsScreen extends ConsumerWidget {
         actions: [
           if (unread > 0 && user != null)
             TextButton(
-              onPressed: () => ref
-                  .read(notificationsProvider.notifier)
-                  .markAllAsRead(user.email),
+              onPressed: () =>
+                  ref.read(notificationsProvider.notifier).markAllAsRead(),
               child: const Text('Marcar todas'),
             ),
         ],

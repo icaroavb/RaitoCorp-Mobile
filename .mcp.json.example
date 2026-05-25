@@ -1,0 +1,12 @@
+{
+  "_comment": "Copie para .mcp.json e troque pelo seu token. .mcp.json fica no .gitignore.",
+  "mcpServers": {
+    "n8n": {
+      "type": "http",
+      "url": "https://n8n.raitocorp.com.br/mcp-server/http",
+      "headers": {
+        "Authorization": "Bearer SUBSTITUA_PELO_TOKEN_NOVO_DO_N8N"
+      }
+    }
+  }
+}

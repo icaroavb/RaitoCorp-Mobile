@@ -4,10 +4,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../../core/mock/mock_users.dart';
+import '../../../../core/api/api_exception.dart';
+import '../../../../core/api/api_providers.dart';
 import '../../../profile/domain/entities/user_entity.dart';
+import '../../data/auth_repository.dart';
 
 sealed class AuthState {
   const AuthState();
@@ -28,9 +29,13 @@ class Authenticated extends AuthState {
 }
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  AuthNotifier() : super(const AuthLoading()) {
+  AuthNotifier(this._repo, this._api) : super(const AuthLoading()) {
+    _api.onUnauthorized = _onUnauthorized;
     _load();
   }
+
+  final AuthRepository _repo;
+  final dynamic _api; // ApiClient — guardado só pra registrar callback
 
   final _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
@@ -39,36 +44,41 @@ class AuthNotifier extends StateNotifier<AuthState> {
   );
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final email = prefs.getString('auth_email');
-    if (email != null) {
-      final cred = findCredentialByEmail(email);
-      if (cred != null) {
-        state = Authenticated(cred.user);
-        return;
-      }
+    try {
+      final user = await _repo.currentUser();
+      state = user == null ? const Unauthenticated() : Authenticated(user);
+    } on UnauthorizedException {
+      await _repo.logout();
+      state = const Unauthenticated();
+    } on ApiException {
+      state = const Unauthenticated();
     }
-    state = const Unauthenticated();
   }
 
-  /// Retorna true em caso de sucesso.
+  void _onUnauthorized() {
+    if (state is Authenticated) {
+      _repo.logout();
+      state = const Unauthenticated('Sua sessão expirou. Entre novamente.');
+    }
+  }
+
   Future<bool> login(String email, String password) async {
     state = const AuthLoading();
-    await Future.delayed(const Duration(milliseconds: 500));
-    final cred = findCredential(email.trim(), password);
-    if (cred == null) {
+    try {
+      final session = await _repo.login(email, password);
+      state = Authenticated(session.user);
+      return true;
+    } on UnauthorizedException {
       state = const Unauthenticated(
         'E-mail ou senha incorretos. Verifique e tente novamente.',
       );
       return false;
+    } on ApiException catch (e) {
+      state = Unauthenticated(e.message);
+      return false;
     }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_email', cred.user.email);
-    state = Authenticated(cred.user);
-    return true;
   }
 
-  /// Login via Google. Retorna true em caso de sucesso.
   Future<bool> loginWithGoogle() async {
     try {
       final account = await _googleSignIn.signIn();
@@ -76,68 +86,26 @@ class AuthNotifier extends StateNotifier<AuthState> {
         state = const Unauthenticated();
         return false;
       }
+      final auth = await account.authentication;
+      final idToken = auth.idToken;
 
-      String email = account.email;
-      String? displayName = account.displayName;
-
-      // Na web, o plugin token-flow pode retornar email/displayName vazios.
-      // Buscamos os dados via People API usando o access token.
-      if (kIsWeb && (email.isEmpty)) {
-        final auth = await account.authentication;
-        final accessToken = auth.accessToken;
-        if (accessToken != null) {
-          final res = await http.get(
-            Uri.parse(
-              'https://people.googleapis.com/v1/people/me'
-              '?personFields=names,emailAddresses',
-            ),
-            headers: {'Authorization': 'Bearer $accessToken'},
-          );
-          if (res.statusCode == 200) {
-            final data = jsonDecode(res.body) as Map<String, dynamic>;
-            final emails = data['emailAddresses'] as List<dynamic>?;
-            final names = data['names'] as List<dynamic>?;
-            if (emails != null && emails.isNotEmpty) {
-              email = (emails.first as Map)['value'] as String? ?? email;
-            }
-            if (names != null && names.isNotEmpty) {
-              displayName =
-                  (names.first as Map)['displayName'] as String? ?? displayName;
-            }
-          }
+      if (idToken == null || idToken.isEmpty) {
+        // Fallback web: tenta puxar email via People API só pra mostrar erro útil.
+        if (kIsWeb) {
+          await _debugFetchProfile(auth.accessToken);
         }
-      }
-
-      if (email.isEmpty) {
         state = const Unauthenticated(
-          'Não foi possível obter o e-mail da conta Google.',
+          'Não foi possível obter o token Google. Tente novamente.',
         );
         return false;
       }
 
-      var cred = findCredentialByEmail(email);
-      if (cred == null) {
-        final name = displayName ?? email.split('@').first;
-        final user = UserEntity(
-          email: email,
-          name: name,
-          initials: _initials(name),
-          isAdmin: email.toLowerCase().contains('admin'),
-          memberSince: DateTime.now(),
-          loyaltyPoints: 100,
-        );
-        mockCredentials.add(MockCredential(
-          user: user,
-          password: '',
-          addresses: const [],
-          favoriteProductIds: const {},
-        ));
-        cred = mockCredentials.last;
-      }
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('auth_email', cred.user.email);
-      state = Authenticated(cred.user);
+      final session = await _repo.loginWithGoogle(idToken);
+      state = Authenticated(session.user);
       return true;
+    } on ApiException catch (e) {
+      state = Unauthenticated(e.message);
+      return false;
     } catch (_) {
       state = const Unauthenticated(
         'Não foi possível entrar com Google. Verifique as configurações.',
@@ -146,65 +114,69 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
-  /// Cadastro cria um usuário em memória (não persistido entre sessões porque
-  /// a lista mockCredentials é const, mas o login funciona enquanto o app vive).
   Future<bool> register(String name, String email, String password) async {
     state = const AuthLoading();
-    await Future.delayed(const Duration(milliseconds: 500));
-    // Verifica se já existe
-    if (findCredentialByEmail(email) != null) {
-      state = const Unauthenticated(
-        'Este e-mail já está cadastrado. Tente fazer login.',
+    try {
+      final session = await _repo.register(
+        name: name,
+        email: email,
+        password: password,
       );
+      state = Authenticated(session.user);
+      return true;
+    } on ValidationException catch (e) {
+      state = Unauthenticated(e.message);
+      return false;
+    } on ApiException catch (e) {
+      state = Unauthenticated(e.message);
       return false;
     }
-    final user = UserEntity(
-      email: email,
-      name: name.isNotEmpty ? name : email.split('@').first,
-      initials: _initials(name.isNotEmpty ? name : email.split('@').first),
-      isAdmin: email.toLowerCase().contains('admin'),
-      memberSince: DateTime.now(),
-      loyaltyPoints: 100,
-    );
-    mockCredentials.add(
-      MockCredential(
-        user: user,
-        password: password,
-        addresses: const [],
-        favoriteProductIds: const {},
-      ),
-    );
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_email', email);
-    state = Authenticated(user);
-    return true;
   }
 
   Future<void> logout() async {
-    await _googleSignIn.signOut();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_email');
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {}
+    await _repo.logout();
     state = const Unauthenticated();
   }
 
   Future<void> updateProfile({String? name, String? phone}) async {
     final current = state;
     if (current is! Authenticated) return;
-    final updated = current.user.copyWith(name: name, phone: phone);
-    state = Authenticated(updated);
+    try {
+      await _repo.updateProfile(name: name, phone: phone);
+      state = Authenticated(current.user.copyWith(name: name, phone: phone));
+    } on ApiException {
+      // Mantém o estado atual; UI pode exibir snackbar lendo via try/catch.
+      rethrow;
+    }
   }
 
-  String _initials(String name) {
-    final parts = name.trim().split(' ').where((p) => p.isNotEmpty).toList();
-    if (parts.isEmpty) return '?';
-    if (parts.length == 1) return parts.first[0].toUpperCase();
-    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+  /// Só pra logging — não afeta o fluxo.
+  Future<void> _debugFetchProfile(String? accessToken) async {
+    if (accessToken == null) return;
+    try {
+      final res = await http.get(
+        Uri.parse(
+          'https://people.googleapis.com/v1/people/me'
+          '?personFields=names,emailAddresses',
+        ),
+        headers: {'Authorization': 'Bearer $accessToken'},
+      );
+      if (res.statusCode == 200) {
+        jsonDecode(res.body);
+      }
+    } catch (_) {}
   }
 }
 
 final authProvider =
     StateNotifierProvider<AuthNotifier, AuthState>((ref) {
-  return AuthNotifier();
+  return AuthNotifier(
+    ref.watch(authRepositoryProvider),
+    ref.watch(apiClientProvider),
+  );
 });
 
 final currentUserProvider = Provider<UserEntity?>((ref) {

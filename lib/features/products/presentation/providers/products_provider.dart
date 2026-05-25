@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/mock/mock_products.dart';
+import '../../data/products_repository.dart';
 import '../../domain/entities/product_entity.dart';
 import '../../domain/entities/review_entity.dart';
 
@@ -30,8 +30,7 @@ final productFilterProvider =
     StateProvider<ProductFilter>((ref) => const ProductFilter());
 
 final allProductsProvider = FutureProvider<List<ProductEntity>>((ref) async {
-  await Future.delayed(const Duration(milliseconds: 400));
-  return mockProducts;
+  return ref.watch(productsRepositoryProvider).fetchAll();
 });
 
 final filteredProductsProvider = Provider<AsyncValue<List<ProductEntity>>>((ref) {
@@ -72,6 +71,5 @@ final productByIdProvider =
 
 final productReviewsProvider =
     FutureProvider.family<List<ReviewEntity>, String>((ref, productId) async {
-  await Future.delayed(const Duration(milliseconds: 200));
-  return mockReviews;
+  return ref.watch(productsRepositoryProvider).fetchReviews(productId);
 });

@@ -43,3 +43,30 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# MCP — token sensível, nunca versionar
+.mcp.json
+.env
+.env.local
+
+# Arquivos locais de build (caminho de SDK da máquina — não versionar)
+**/android/local.properties
+/ios/Flutter/flutter_export_environment.sh
+/ios/Flutter/Generated.xcconfig
+
+# Assinatura Android — chaves NUNCA vão pro git
+*.jks
+*.keystore
+**/android/key.properties
+
+# Cocoapods / iOS gerados
+/ios/Pods/
+/ios/.symlinks/
+/macos/Pods/
+
+# FVM (gerenciador de versão do Flutter, se usado)
+.fvm/
+
+# SO / editor
+Thumbs.db
+*.tmp

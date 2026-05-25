@@ -42,8 +42,11 @@ dependencies:
   # Login social
   google_sign_in: ^6.2.1
 
-  # HTTP (ViaCEP)
+  # HTTP (n8n + ViaCEP)
   http: ^1.2.2
+
+  # Armazenamento seguro (JWT)
+  flutter_secure_storage: ^9.2.2
 
 dev_dependencies:
   flutter_test:

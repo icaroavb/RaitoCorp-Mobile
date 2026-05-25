@@ -1,46 +1,50 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/mock/mock_orders.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../data/orders_repository.dart';
 import '../../domain/entities/order_entity.dart';
 
-/// Lista de pedidos reativa por usuário logado.
-/// Mantém uma cópia mutável em memória para permitir `addOrder` via checkout.
+/// Notifier que mantém em memória a lista de pedidos do usuário logado.
+/// Faz fetch inicial automático ao logar e expõe ações que sincronizam com
+/// o backend (n8n) antes de atualizar o estado local.
 class OrdersNotifier extends StateNotifier<List<OrderEntity>> {
-  OrdersNotifier() : super(List.of(mockOrders));
+  OrdersNotifier(this._repo, this._isLoggedIn) : super(const []) {
+    if (_isLoggedIn) refresh();
+  }
 
+  final OrdersRepository _repo;
+  final bool _isLoggedIn;
+
+  Future<void> refresh() async {
+    try {
+      state = await _repo.fetchMine();
+    } catch (_) {
+      // Mantém o último estado conhecido em caso de falha de rede.
+    }
+  }
+
+  /// Adiciona localmente um pedido já criado no backend (vindo do checkout).
   void addOrder(OrderEntity order) {
     state = [order, ...state];
   }
 
-  void cancelOrder(String orderId) {
-    state = state
-        .map((o) => o.id == orderId
-            ? OrderEntity(
-                id: o.id,
-                userEmail: o.userEmail,
-                createdAt: o.createdAt,
-                status: OrderStatus.cancelled,
-                items: o.items,
-                address: o.address,
-                subtotal: o.subtotal,
-                shipping: o.shipping,
-                discount: o.discount,
-                paymentMethod: o.paymentMethod,
-                timeline: o.timeline,
-                reviewed: o.reviewed,
-              )
-            : o)
-        .toList();
+  Future<void> cancelOrder(String orderId) async {
+    final updated = await _repo.cancel(orderId);
+    state = [
+      for (final o in state)
+        if (o.id == orderId) updated else o,
+    ];
   }
 }
 
 final ordersProvider =
     StateNotifierProvider<OrdersNotifier, List<OrderEntity>>((ref) {
-  return OrdersNotifier();
+  return OrdersNotifier(
+    ref.watch(ordersRepositoryProvider),
+    ref.watch(isLoggedInProvider),
+  );
 });
 
-/// Pedidos do usuário logado.
 final userOrdersProvider = Provider<List<OrderEntity>>((ref) {
   final user = ref.watch(currentUserProvider);
   if (user == null) return const [];
@@ -50,7 +54,6 @@ final userOrdersProvider = Provider<List<OrderEntity>>((ref) {
   return mine;
 });
 
-/// Primeiro pedido em andamento (se houver).
 final activeOrderProvider = Provider<OrderEntity?>((ref) {
   final orders = ref.watch(userOrdersProvider);
   for (final o in orders) {
@@ -59,7 +62,6 @@ final activeOrderProvider = Provider<OrderEntity?>((ref) {
   return null;
 });
 
-/// Pedido único por id.
 final orderByIdProvider =
     Provider.family<OrderEntity?, String>((ref, id) {
   final all = ref.watch(ordersProvider);

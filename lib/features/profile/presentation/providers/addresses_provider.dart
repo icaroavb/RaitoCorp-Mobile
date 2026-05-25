@@ -1,65 +1,55 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/mock/mock_users.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../data/addresses_repository.dart';
 import '../../domain/entities/address_entity.dart';
 
-/// Armazena endereços por e-mail (em memória durante a sessão).
-class AddressesNotifier
-    extends StateNotifier<Map<String, List<AddressEntity>>> {
-  AddressesNotifier()
-      : super({
-          for (final c in mockCredentials) c.user.email: List.of(c.addresses),
-        });
-
-  void add(String email, AddressEntity address) {
-    final current = List<AddressEntity>.of(state[email] ?? const []);
-    // Se for o primeiro endereço, marca como padrão
-    final addr = current.isEmpty
-        ? AddressEntity(
-            id: address.id,
-            label: address.label,
-            street: address.street,
-            number: address.number,
-            complement: address.complement,
-            neighborhood: address.neighborhood,
-            city: address.city,
-            state: address.state,
-            zipCode: address.zipCode,
-            isDefault: true,
-          )
-        : address;
-    current.add(addr);
-    state = {...state, email: current};
+class AddressesNotifier extends StateNotifier<List<AddressEntity>> {
+  AddressesNotifier(this._repo, this._isLoggedIn) : super(const []) {
+    if (_isLoggedIn) refresh();
   }
 
-  void remove(String email, String addressId) {
-    final current = List<AddressEntity>.of(state[email] ?? const [])
-      ..removeWhere((a) => a.id == addressId);
-    // Se removeu o padrão, promove o primeiro da lista
-    if (!current.any((a) => a.isDefault) && current.isNotEmpty) {
-      current[0] = current[0].copyWith(isDefault: true);
-    }
-    state = {...state, email: current};
+  final AddressesRepository _repo;
+  final bool _isLoggedIn;
+
+  Future<void> refresh() async {
+    try {
+      state = await _repo.fetchMine();
+    } catch (_) {}
   }
 
-  void setDefault(String email, String addressId) {
-    final current = (state[email] ?? const <AddressEntity>[])
+  /// Mantém assinatura compatível com as telas (que ainda passam email).
+  /// O `email` é ignorado: o backend já sabe quem é o usuário pelo JWT.
+  Future<void> add(String email, AddressEntity address) async {
+    final created = await _repo.create(address);
+    state = [...state, created];
+  }
+
+  Future<void> remove(String email, String addressId) async {
+    await _repo.remove(addressId);
+    state = state.where((a) => a.id != addressId).toList();
+  }
+
+  Future<void> setDefault(String email, String addressId) async {
+    await _repo.setDefault(addressId);
+    state = state
         .map((a) => a.copyWith(isDefault: a.id == addressId))
         .toList();
-    state = {...state, email: current};
   }
 }
 
 final addressesProvider =
-    StateNotifierProvider<AddressesNotifier, Map<String, List<AddressEntity>>>(
-  (ref) => AddressesNotifier(),
-);
+    StateNotifierProvider<AddressesNotifier, List<AddressEntity>>((ref) {
+  return AddressesNotifier(
+    ref.watch(addressesRepositoryProvider),
+    ref.watch(isLoggedInProvider),
+  );
+});
 
 final userAddressesProvider = Provider<List<AddressEntity>>((ref) {
   final user = ref.watch(currentUserProvider);
   if (user == null) return const [];
-  return ref.watch(addressesProvider)[user.email] ?? const [];
+  return ref.watch(addressesProvider);
 });
 
 final defaultAddressProvider = Provider<AddressEntity?>((ref) {

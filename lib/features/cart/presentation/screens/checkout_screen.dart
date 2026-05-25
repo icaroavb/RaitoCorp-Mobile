@@ -9,8 +9,8 @@ import '../../../../core/theme/app_radius.dart';
 import '../../../../core/theme/app_spacing.dart';
 import '../../../../shared/extensions/number_extensions.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../../profile/data/orders_repository.dart';
 import '../../../profile/domain/entities/address_entity.dart';
-import '../../../profile/domain/entities/order_entity.dart';
 import '../../../profile/presentation/providers/addresses_provider.dart';
 import '../../../profile/presentation/providers/orders_provider.dart';
 import '../../../profile/presentation/widgets/address_form_sheet.dart';
@@ -356,61 +356,39 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
     double discount,
   ) async {
     final cart = ref.read(cartProvider);
-    final orderId = '${DateTime.now().millisecondsSinceEpoch}'.substring(7);
+    final repo = ref.read(ordersRepositoryProvider);
 
-    // Loading modal
     showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!mounted) return;
-    Navigator.of(context, rootNavigator: true).pop();
 
-    final order = OrderEntity(
-      id: orderId,
-      userEmail: email,
-      createdAt: DateTime.now(),
-      status: OrderStatus.confirmed,
-      items: cart
-          .map((c) => OrderItem(
-                productId: c.productId,
-                productName: c.productName,
-                imageUrl: c.imageUrl,
-                subtitle: c.subtitle,
-                price: c.price,
-                quantity: c.quantity,
-              ))
-          .toList(),
-      address: address,
-      subtotal: subtotal,
-      shipping: shipping,
-      discount: discount,
-      paymentMethod: _paymentMethod.label,
-      estimatedDelivery: DateTime.now().add(const Duration(days: 2)),
-      timeline: [
-        OrderTimelineEvent(
-          title: 'Pedido confirmado',
-          timestamp: DateTime.now(),
-          completed: true,
-        ),
-        OrderTimelineEvent(
-          title: 'Pagamento aprovado',
-          timestamp: DateTime.now(),
-          active: true,
-        ),
-        const OrderTimelineEvent(title: 'Em preparo'),
-        const OrderTimelineEvent(title: 'Saiu para entrega'),
-        const OrderTimelineEvent(title: 'Entregue'),
-      ],
-    );
+    try {
+      final order = await repo.create(
+        items: cart,
+        address: address,
+        paymentMethod: _paymentMethod.label,
+        subtotal: subtotal,
+        shipping: shipping,
+        discount: discount,
+      );
 
-    ref.read(ordersProvider.notifier).addOrder(order);
-    ref.read(cartProvider.notifier).clear();
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
 
-    if (!mounted) return;
-    context.pushReplacement('/checkout/success/$orderId');
+      ref.read(ordersProvider.notifier).addOrder(order);
+      ref.read(cartProvider.notifier).clear();
+
+      if (!mounted) return;
+      context.pushReplacement('/checkout/success/${order.id}');
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Não foi possível finalizar: $e')),
+      );
+    }
   }
 }
 

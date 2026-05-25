@@ -1,26 +1,48 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/mock/mock_notifications.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
+import '../../data/notifications_repository.dart';
 import '../../domain/entities/notification_entity.dart';
 
 class NotificationsNotifier extends StateNotifier<List<AppNotification>> {
-  NotificationsNotifier() : super(List.of(mockNotifications));
+  NotificationsNotifier(this._repo, this._isLoggedIn) : super(const []) {
+    if (_isLoggedIn) refresh();
+  }
 
-  void markAsRead(String id) {
+  final NotificationsRepository _repo;
+  final bool _isLoggedIn;
+
+  Future<void> refresh() async {
+    try {
+      state = await _repo.fetchMine();
+    } catch (_) {}
+  }
+
+  Future<void> markAsRead(String id) async {
     state = state
         .map((n) => n.id == id ? n.copyWith(read: true) : n)
         .toList();
+    try {
+      await _repo.markAsRead(id);
+    } catch (_) {}
   }
 
-  void markAllAsRead(String email) {
-    state = state
-        .map((n) => n.userEmail == email ? n.copyWith(read: true) : n)
-        .toList();
+  /// `email` ignorado — backend usa JWT.
+  Future<void> markAllAsRead([String? email]) async {
+    state = state.map((n) => n.copyWith(read: true)).toList();
+    try {
+      await _repo.markAllAsRead();
+    } catch (_) {}
   }
 
-  void remove(String id) {
+  Future<void> remove(String id) async {
+    final previous = state;
     state = state.where((n) => n.id != id).toList();
+    try {
+      await _repo.remove(id);
+    } catch (_) {
+      state = previous;
+    }
   }
 
   void add(AppNotification notification) {
@@ -29,11 +51,13 @@ class NotificationsNotifier extends StateNotifier<List<AppNotification>> {
 }
 
 final notificationsProvider =
-    StateNotifierProvider<NotificationsNotifier, List<AppNotification>>(
-  (ref) => NotificationsNotifier(),
-);
+    StateNotifierProvider<NotificationsNotifier, List<AppNotification>>((ref) {
+  return NotificationsNotifier(
+    ref.watch(notificationsRepositoryProvider),
+    ref.watch(isLoggedInProvider),
+  );
+});
 
-/// Notificações do usuário logado, ordenadas da mais recente para a mais antiga.
 final userNotificationsProvider = Provider<List<AppNotification>>((ref) {
   final user = ref.watch(currentUserProvider);
   if (user == null) return const [];
@@ -43,12 +67,10 @@ final userNotificationsProvider = Provider<List<AppNotification>>((ref) {
   return mine;
 });
 
-/// Contagem de notificações não lidas do usuário logado.
 final unreadNotificationsCountProvider = Provider<int>((ref) {
   return ref.watch(userNotificationsProvider).where((n) => !n.read).length;
 });
 
-/// Notificações agrupadas por "Hoje / Ontem / Esta semana / Mais antigas".
 final groupedNotificationsProvider =
     Provider<Map<String, List<AppNotification>>>((ref) {
   final list = ref.watch(userNotificationsProvider);
