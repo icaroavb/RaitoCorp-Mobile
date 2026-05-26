@@ -15,10 +15,11 @@ Aplicativo de e-commerce de iluminação desenvolvido em Flutter. Cobre o ciclo 
 7. [Autenticação](#autenticação)
 8. [Navegação](#navegação)
 9. [Persistência de dados](#persistência-de-dados)
-10. [Dados mock](#dados-mock)
-11. [Estrutura de pastas](#estrutura-de-pastas)
-12. [Como rodar](#como-rodar)
-13. [Decisões técnicas](#decisões-técnicas)
+10. [Dados (API real)](#dados-api-real)
+11. [Banco de dados (Postgres)](#banco-de-dados-postgres)
+12. [Estrutura de pastas](#estrutura-de-pastas)
+13. [Como rodar](#como-rodar)
+14. [Decisões técnicas](#decisões-técnicas)
 
 ---
 
@@ -32,10 +33,17 @@ A Raitõ Corp é uma loja especializada em iluminação. O app cobre:
 - Histórico de pedidos com timeline de status e cancelamento
 - Perfil completo: dados pessoais, endereços, favoritos, avaliações, notificações e pontos de fidelidade
 - Login com email/senha e Google Sign-In (web + Android + iOS)
-- Consultor IA integrado
+- Painel administrativo: gestão de pedidos (avançar status) e CRUD de produtos com upload de imagem
+- Avaliação de produtos entregues com foto e notificações locais de status do pedido
 - Auto-preenchimento de endereço via CEP
 
-> **Este projeto é uma demonstração.** Toda autenticação, pedidos e produtos são mockados em memória. Nenhum dado é enviado para um backend real.
+> **Backend real via n8n + Postgres.** O app consome uma API HTTP servida por
+> workflows n8n (`https://n8n.raitocorp.com.br/webhook/...`), que são a camada de
+> regras de negócio sobre o Postgres — o app nunca acessa o banco direto. Os
+> dados mock antigos foram substituídos por essa integração. Contrato completo
+> em [`docs/N8N_API.md`](docs/N8N_API.md); estado do projeto em
+> [`docs/HANDOFF.md`](docs/HANDOFF.md). Único módulo ainda pendente: o
+> **Consultor IA** (`/consultant/*`).
 
 ---
 
@@ -55,17 +63,22 @@ A Raitõ Corp é uma loja especializada em iluminação. O app cobre:
 | `flutter_animate` | ^4.5.0 | Animações | DSL fluente para animar widgets sem `AnimationController` manual |
 | `shimmer` | ^3.0.0 | Loading skeleton | Efeito de carregamento padrão de mercado com uma linha de código |
 | `intl` | ^0.19.0 | Formatação | Locale `pt_BR` para moeda e datas |
-| `image_picker` | ^1.1.2 | Galeria/câmera | Seleção de foto de perfil |
+| `image_picker` | ^1.1.2 | Galeria/câmera | Foto de avaliação e de produto (admin) — câmera ou galeria |
 | `equatable` | ^2.0.7 | Igualdade de entidades | Evita `==` manual em entidades de domínio |
 | `google_sign_in` | ^6.2.1 | Login social | OAuth2 via Google, compatível com Android, iOS e Web |
-| `http` | ^1.2.2 | Requisições HTTP | ViaCEP, BrasilAPI e People API (fallback do Google Sign-In web) |
+| `http` | ^1.2.2 | Requisições HTTP | API n8n, Cloudinary, ViaCEP/BrasilAPI |
+| `flutter_secure_storage` | ^9.2.2 | Token JWT | Guarda o JWT da sessão de forma segura (Keystore/Keychain) |
+| `flutter_local_notifications` | ^21.0.0 | Push local | Notifica no celular quando o pedido sai pra entrega / é entregue |
 
-### Firebase / Google Cloud
+### Backend e serviços externos
 
 | Serviço | Uso |
 |---|---|
-| Google Cloud OAuth 2.0 | Client ID para autenticação web via `google_sign_in` |
-| People API | Busca nome/email do usuário após login Google na web (fallback quando o token flow não popula o `GoogleSignInAccount`) |
+| **n8n** (`n8n.raitocorp.com.br`) | API gateway + regras de negócio sobre o Postgres. Auth (bcrypt + JWT HS256) feita em SQL via `pgcrypto`. Ver `docs/N8N_API.md`. |
+| **Postgres** | Banco (users, products, orders, reviews, etc.). Acessado só pelo n8n. |
+| **Cloudinary** | Upload de imagens (produtos e fotos de avaliação) via unsigned preset. |
+| Google Cloud OAuth 2.0 | Client ID para Google Sign-In |
+| People API | Fallback de nome/email no login Google web |
 
 ---
 
@@ -77,8 +90,10 @@ O projeto segue uma arquitetura **feature-first** onde cada feature encapsula su
 
 ```
 lib/features/<feature>/
+  data/
+    *_repository.dart  ← acesso à API n8n via ApiClient
   domain/
-    entities/        ← modelos de dados puros (sem Flutter)
+    entities/        ← modelos de dados puros (sem Flutter), com fromJson/toJson
   presentation/
     providers/       ← estado Riverpod (StateNotifier / Provider)
     screens/         ← páginas completas
@@ -89,9 +104,13 @@ lib/features/<feature>/
 
 Em projetos de médio porte, organizar por camada (`models/`, `screens/`, `providers/`) cria acoplamento invisível entre features: uma mudança na entidade `Order` exige navegar por 4 pastas diferentes. Com feature-first, tudo que pertence a `orders` fica junto — facilita deleção, refatoração e onboarding.
 
-**Por que Clean Architecture simplificada?**
+**Camada `data` (repositórios)**
 
-Não há repositórios nem casos de uso porque não há backend real. Adicionar essas camadas agora seria over-engineering. A separação `domain/entities` + `presentation/providers` já dá o benefício principal: entidades de domínio sem dependência de Flutter, e estado desacoplado da UI.
+Cada feature tem repositórios que encapsulam as chamadas à API (via o
+`ApiClient` central, que injeta `X-API-Key` + `Bearer` JWT e traduz status code
+em exceções tipadas). Os providers consomem os repositórios — a UI não conhece
+detalhes de HTTP. Entidades em `domain/entities` permanecem puras (sem Flutter),
+com `fromJson`/`toJson` que casam com o contrato do n8n.
 
 ### Camadas presentes
 
@@ -100,10 +119,12 @@ Não há repositórios nem casos de uso porque não há backend real. Adicionar 
 │  Presentation (Screens + Widgets)            │
 │  Riverpod Providers (StateNotifier)          │
 ├─────────────────────────────────────────────┤
+│  Data (Repositories → ApiClient)             │
+├─────────────────────────────────────────────┤
 │  Domain (Entities — Dart puro)               │
 ├─────────────────────────────────────────────┤
-│  Infrastructure (Mock data + Services)       │
-│  Hive · SharedPreferences · HTTP APIs        │
+│  Infrastructure (Services)                   │
+│  n8n API · Cloudinary · Hive · SecureStorage │
 └─────────────────────────────────────────────┘
 ```
 
@@ -339,8 +360,10 @@ sealed class AuthState {
 
 ### Login com email/senha
 
-- Validação contra `mockCredentials` (lista em memória)
-- Persiste email em `SharedPreferences` para reidratação na próxima sessão
+- Validação no backend (`POST /auth/login` no n8n): senha conferida com bcrypt
+  via `pgcrypto`, devolve um JWT HS256 (TTL 7 dias)
+- O JWT é guardado em `flutter_secure_storage`; a sessão é reidratada via
+  `GET /me` na inicialização
 - Mensagem de erro inline no formulário
 - `AuthLoading` exibe `CircularProgressIndicator` no botão
 
@@ -454,37 +477,139 @@ Carrinho serializado como JSON em `Box<String>`. Hive foi escolhido sobre SQLite
 - Performance superior para escritas frequentes (atualizações de quantidade)
 - Compatível com web sem FFI
 
-### SharedPreferences — Sessão de auth
+### flutter_secure_storage — Sessão de auth
 
-Armazena apenas o `email` do usuário logado. Na inicialização do `AuthNotifier`, reidrata o estado reconstruindo o `UserEntity` a partir da lista mock.
+Armazena o **JWT** da sessão de forma segura (Android Keystore / iOS Keychain).
+Na inicialização do `AuthNotifier`, o token é lido e a sessão reidratada via
+`GET /me` no backend (que valida o JWT e devolve o usuário).
 
 ---
 
-## Dados mock
+## Dados (API real)
 
-Todo o conteúdo do app é mockado em `lib/core/mock/`:
+Os dados mock foram removidos. Todo o conteúdo vem da API n8n + Postgres
+através dos repositórios em `lib/features/<feature>/data/*_repository.dart`,
+que chamam o `ApiClient` central (`lib/core/api/`). O catálogo nasce com alguns
+produtos de exemplo semeados no banco, e cresce conforme o admin cadastra novos.
 
-### Produtos (`mock_products.dart`)
+**Usuários de teste:**
 
-8 luminários com dados completos:
+| Perfil | Login | Senha |
+|---|---|---|
+| Cliente | `teste@raito.com` | `teste1234` |
+| Admin (vê o Painel Admin) | `admin@raito.com` | `admin1234` |
 
-| Produto | Preço | Temperatura | Ambiente |
-|---|---|---|---|
-| Pendente Moderno | R$ 890 | Quente (2700K) | Sala de jantar |
-| Arandela Externa | R$ 459 | Quente (3000K) | Externo |
-| Luminária de Mesa | R$ 289 | Neutro (4000K) | Escritório |
-| Spot Embutido LED | R$ 149 | Neutro (4000K) | Múltiplos |
-| Abajur de Cabeceira | R$ 349 | Quente (2700K) | Quarto |
-| Fita LED 5m RGB | R$ 129 | Frio (6500K) | Múltiplos |
-| Luminária de Chão | R$ 699 | Quente (2700K) | Sala |
-| Kit Iluminação de Palco | R$ 2.890 | Frio (6000K) | Comercial |
+> Também é possível criar conta nova pelo próprio app (cadastro).
 
-### Pedidos (`mock_orders.dart`)
+---
 
-Distribuídos para demonstrar todos os estados:
-- **Camila:** 1 confirmado (em andamento) + 1 entregue
-- **Maria:** 1 entregue
-- **Admin:** 1 cancelado
+## Banco de dados (Postgres)
+
+> **Para quem vai integrar novos módulos (ex: o Consultor IA / chatbot):** esta é
+> a arquitetura **real e atual** do banco. O app nunca acessa o Postgres direto —
+> tudo passa por workflows n8n. Extensions habilitadas: `pgcrypto` (UUID, bcrypt,
+> hmac) e `citext` (email case-insensitive).
+
+### Tabelas existentes
+
+```
+users
+  id              uuid PK        gen_random_uuid()
+  email           citext UNIQUE NOT NULL
+  name            text NOT NULL
+  password_hash   text           -- bcrypt via pgcrypto; NULL p/ conta só-Google
+  google_sub      text UNIQUE    -- 'sub' do id_token Google
+  phone           text
+  birth_date      date
+  is_admin        boolean NOT NULL DEFAULT false
+  loyalty_points  int NOT NULL DEFAULT 0
+  created_at      timestamptz NOT NULL DEFAULT now()
+
+addresses
+  id, user_id(FK users), label, street, number, complement, neighborhood,
+  city, state char(2), zip_code, is_default bool, created_at
+
+products
+  id uuid PK, name, description, price numeric(10,2), original_price,
+  image_urls text[], light_temperature, socket_type, is_bivolt, is_easy_install,
+  energy_saving_percent, lifespan_years, brightness_level, ideal_rooms text[],
+  power_watts, lumens, color_temperature_k, dimensions, weight_kg,
+  certifications text[], warranty_years, rating numeric(3,2), review_count,
+  sold_count, is_best_seller, category, tags text[], active bool, created_at
+  -- NOTA: products.rating é NOT NULL (use coalesce(avg(...),0) ao recalcular)
+
+reviews
+  id, product_id(FK products), user_id(FK users, NULL), author_name, rating int,
+  comment, room, has_photo bool, photo_url text, created_at
+
+orders
+  id text PK          -- short id legível, ex "12847"
+  user_id(FK users), status, address_id(FK addresses, NULL),
+  address_snapshot jsonb,        -- endereço congelado no momento da compra
+  subtotal, shipping, discount, payment_method, estimated_delivery, reviewed bool,
+  created_at
+  -- status: confirmed | preparing | shipped | delivered | cancelled
+
+order_items
+  id, order_id(FK orders), product_id(FK products, NULL), product_name,
+  image_url, subtitle, price, quantity
+
+order_timeline
+  id, order_id(FK orders), title, timestamp, completed bool, active bool,
+  description, position int
+
+user_favorites
+  user_id(FK users), product_id(FK products), created_at   -- PK (user_id, product_id)
+
+notifications
+  id, user_id(FK users), type, title, body, read bool, created_at
+  -- type: order | promotion | system | review
+```
+
+### Ainda NÃO criadas — necessárias para o Consultor IA
+
+As tabelas de chat do contrato (`docs/N8N_API.md` §2) ainda não existem no banco.
+Quem for fazer o bot precisa criá-las:
+
+```sql
+CREATE TABLE chat_sessions (
+  id          TEXT PRIMARY KEY,                      -- gerado pelo app
+  user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE chat_messages (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id               TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  author                   TEXT NOT NULL,            -- user | bot
+  type                     TEXT NOT NULL,            -- text | image | productRecommendation
+  text                     TEXT,
+  image_path               TEXT,
+  product_recommendations  UUID[] NOT NULL DEFAULT '{}',  -- ids de products
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX ON chat_messages (session_id, created_at);
+```
+
+### Convenções ao criar workflows que tocam o banco
+
+Esta instância n8n é *hardened* — pontos que mudam como escrever os workflows:
+
+- **Sem `$env` e sem `require('crypto')`** em nós Code. Auth (verificar senha,
+  gerar/validar JWT HS256) é feita **100% em SQL via `pgcrypto`**. O endpoint do
+  bot é protegido por JWT: reusar a mesma CTE de validação dos workflows `/me/*`
+  (recalcula o HMAC e extrai `sub` = user_id).
+- **Credential Postgres** no n8n: `Postgres account`.
+- **`queryReplacement` é CSV** e descarta valor vazio (→ erro "no parameter $N").
+  Use o sentinela `__NULL__` + `nullif($n,'__NULL__')`.
+- **Webhook com path param `:id` não funciona** sem o webhookId na URL → use
+  POST + id no corpo (ou query string em GET), com path estático.
+- **Numa CTE única, um `INSERT` irmão não é visível ao `SELECT` final** (mesmo
+  snapshot). Para responder dados recém-inseridos, monte a resposta a partir dos
+  dados de entrada, não relendo a tabela.
+
+O contrato HTTP do chat (`POST /consultant/message`, `GET /consultant/sessions/:id`,
+upload de imagem) está em [`docs/N8N_API.md`](docs/N8N_API.md) §3.22–3.24.
 
 ---
 
@@ -496,7 +621,10 @@ lib/
 ├── app.dart                         # MaterialApp + tema + router
 │
 ├── core/
-│   ├── mock/                        # dados de demonstração
+│   ├── api/                         # ApiClient (X-API-Key + JWT), auth_storage, exceptions
+│   ├── config/app_config.dart       # base URL, API key, Cloudinary (defaults de prod)
+│   ├── upload/                      # CloudinaryService + seletor câmera/galeria
+│   ├── notifications/               # notificações locais (status do pedido)
 │   ├── router/app_router.dart       # GoRouter — toda a árvore de rotas
 │   ├── services/cep_service.dart    # ViaCEP + BrasilAPI
 │   ├── theme/                       # tokens de design (cores, espaços, raios, tipografia)
@@ -506,14 +634,18 @@ lib/
 │   └── extensions/number_extensions.dart   # formatCurrency() em pt_BR
 │
 └── features/
+    ├── admin/         # hub admin: avançar pedidos + CRUD de produtos
     ├── auth/          # login, registro, Google Sign-In, AuthState sealed
     ├── cart/          # carrinho Hive, checkout, tela de sucesso
-    ├── consultant/    # consultor IA
+    ├── consultant/    # consultor IA (pendente)
     ├── home/          # home screen
     ├── products/      # catálogo, detalhe, filtros, busca
     └── profile/       # hub, pedidos, endereços, favoritos,
                        # avaliações, notificações, meus dados
 ```
+
+> Cada feature tem `data/*_repository.dart` (chama a API) além de
+> `domain/` e `presentation/`.
 
 ---
 
@@ -534,6 +666,10 @@ flutter pub get
 
 ### Executar
 
+O app já aponta pra **produção por padrão** (base URL, API key e Cloudinary
+estão como `defaultValue` em `lib/core/config/app_config.dart`), então
+`flutter run` puro já funciona — sem precisar de `--dart-define`.
+
 ```bash
 # Web (porta fixa necessária para Google Sign-In)
 flutter run -d chrome --web-port=5000
@@ -544,6 +680,21 @@ flutter run -d android
 # iOS
 flutter run -d ios
 ```
+
+Para apontar pra um n8n local/staging, sobrescreva via `--dart-define`
+(`N8N_BASE_URL`, `N8N_API_KEY`, `N8N_WEBHOOK_PREFIX`) — ver scripts em `scripts/`.
+
+### Gerar o APK (distribuição)
+
+```bash
+flutter build apk --release
+# saída: build/app/outputs/flutter-apk/app-release.apk
+```
+
+O APK é assinado com a debug key (suficiente pra distribuir entre colegas —
+instala em qualquer Android habilitando "instalar de fontes desconhecidas").
+Requer Android SDK instalado. O `Raito-v1.0.0.apk` na raiz é a cópia pronta
+pra enviar.
 
 ### Google Sign-In — configuração por plataforma
 
@@ -582,7 +733,11 @@ flutter run -d ios
 
 ### Por que não usar Firebase Auth SDK completo?
 
-O projeto não tem backend real. `firebase_core` + `firebase_auth` aumentariam o bundle ~2MB e exigiriam configuração de regras de segurança sem benefício concreto. O `google_sign_in` isolado cobre OAuth2 com muito menos dependências.
+A autenticação é própria (n8n + JWT), não Firebase Auth. `firebase_core` +
+`firebase_auth` aumentariam o bundle ~2MB e duplicariam a camada de identidade
+que já existe no backend. O `google_sign_in` isolado cobre o OAuth2 do Google
+(o id_token é trocado por um JWT Raitõ no `POST /auth/google`) com muito menos
+dependências.
 
 ### Por que sealed class para AuthState?
 
