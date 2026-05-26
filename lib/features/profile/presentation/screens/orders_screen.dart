@@ -26,11 +26,26 @@ extension _OrdersFilterLabel on OrdersFilter {
 final _ordersFilterProvider =
     StateProvider.autoDispose<OrdersFilter>((_) => OrdersFilter.all);
 
-class OrdersScreen extends ConsumerWidget {
+class OrdersScreen extends ConsumerStatefulWidget {
   const OrdersScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<OrdersScreen> createState() => _OrdersScreenState();
+}
+
+class _OrdersScreenState extends ConsumerState<OrdersScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Recarrega do backend ao abrir, pra refletir mudanças de status feitas
+    // pelo admin enquanto o usuário estava em outra tela.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(ordersProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final filter = ref.watch(_ordersFilterProvider);
     final all = ref.watch(userOrdersProvider);
 
@@ -241,6 +256,19 @@ class _OrderCard extends StatelessWidget {
                 ),
               ],
             ),
+            // Avaliar: só quando entregue e ainda não avaliado.
+            if (order.status.isDelivered && !order.reviewed) ...[
+              const SizedBox(height: AppSpacing.sm),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () =>
+                      context.push('/profile/orders/${order.id}/review'),
+                  icon: Icon(PhosphorIcons.star(), size: 16),
+                  label: const Text('Avaliar produto'),
+                ),
+              ),
+            ],
           ],
         ),
       ),

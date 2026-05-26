@@ -373,14 +373,20 @@ Public.
 ```
 
 **SQL:** `SELECT * FROM products WHERE active = TRUE ORDER BY is_best_seller DESC, name`
+✅ implementado (`products-get-raitocorp`). Arrays TEXT[] viram arrays JSON via `to_jsonb`.
 
-### 3.7 `GET /products/:id`
+### 3.7 `GET /products/detail?id=` ✅ implementado (`products-detail-raitocorp`)
 
-Public. Response = um produto. 404 se não existe.
+> ⚠️ Era `GET /products/:id` — path param `:id` não funciona no n8n sem
+> webhookId. Virou path estático + **query string** `?id=`.
 
-### 3.8 `GET /products/:id/reviews`
+Public. Response = um produto. **404** se não existe/inativo (id malformado também cai em 404, sem erro).
 
-Public.
+### 3.8 `GET /products/reviews?id=` ✅ implementado (`products-reviews-raitocorp`)
+
+> ⚠️ Era `GET /products/:id/reviews` — mesmo motivo. Query string `?id=`.
+
+Public. `author_initials` calculado no SQL; coluna `created_at` mapeada pra `date`.
 
 ```json
 [
@@ -397,7 +403,7 @@ Public.
 ]
 ```
 
-### 3.9 `GET /me/orders` *(JWT)*
+### 3.9 `GET /me/orders` *(JWT)* ✅ implementado (`me-orders-get-raitocorp`)
 
 Lista pedidos do usuário do token. Cada pedido com `items[]` e `timeline[]`.
 
@@ -413,7 +419,7 @@ ORDER BY o.created_at DESC;
 
 O n8n deve montar `address` a partir de `address_snapshot` (que é o endereço congelado no momento da compra).
 
-### 3.10 `POST /me/orders` *(JWT)*
+### 3.10 `POST /me/orders` *(JWT)* ✅ implementado (`me-orders-post-raitocorp`)
 
 **Request:**
 ```json
@@ -438,12 +444,15 @@ O n8n deve montar `address` a partir de `address_snapshot` (que é o endereço c
 5. Insere notificação "Pedido confirmado".
 6. Retorna o pedido completo (mesmo formato do `GET /me/orders`).
 
-### 3.11 `PATCH /me/orders/:id/cancel` *(JWT)*
+### 3.11 `POST /me/orders/cancel` *(JWT)* ✅ implementado (`me-orders-cancel-raitocorp`)
 
+> ⚠️ Era `PATCH /me/orders/:id/cancel` — path param `:id` não funciona no n8n. Virou POST + `id` no body.
+
+**Request:** `{ "id": "<order id>" }`
 **Workflow:**
-1. `UPDATE orders SET status='cancelled' WHERE id=$1 AND user_id=$jwt.sub AND status IN ('confirmed','preparing','shipped') RETURNING *`
+1. `UPDATE orders SET status='cancelled' WHERE id=$1 AND user_id=sub AND status IN ('confirmed','preparing','shipped')`.
 2. Insere evento "Cancelado" em `order_timeline`.
-3. Retorna pedido atualizado.
+3. Retorna pedido atualizado (timeline já inclui Cancelado). **422** se não cancelável.
 
 ### 3.12 `GET /me/addresses` *(JWT)* ✅ implementado (`me-addresses-get-raitocorp`)
 
@@ -476,14 +485,14 @@ Transação: zera `is_default` de todos do user, marca `id=true`.
 **Response 200:** `{ "message": "ok", "updated": 1 }`. **401** se não autorizado.
 Implementado: `me-addresses-default-raitocorp`.
 
-### 3.16 `GET /me/favorites` *(JWT)*
+### 3.16 `GET /me/favorites` *(JWT)* ✅ implementado (`me-favorites-get-raitocorp`)
 
 Retorna **array de product_ids** (strings):
 ```json
 ["uuid1", "uuid2", "uuid3"]
 ```
 
-### 3.17 `POST /me/favorites/toggle` *(JWT)*
+### 3.17 `POST /me/favorites/toggle` *(JWT)* ✅ implementado (`me-favorites-toggle-raitocorp`)
 
 **Request:** `{ "product_id": "uuid" }`
 
@@ -498,19 +507,22 @@ RETURNING xmax = 0 AS favorited;
 
 **Response:** `{ "favorited": true }` ou `{ "favorited": false }`
 
-### 3.18 `GET /me/notifications` *(JWT)*
+### 3.18 `GET /me/notifications` *(JWT)* ✅ implementado (`me-notifications-get-raitocorp`)
 
-Array de notificações do usuário ordenado por `created_at DESC`.
+Array de notificações do usuário ordenado por `created_at DESC`. `user_email` via join.
 
-### 3.19 `PATCH /me/notifications/:id/read` *(JWT)*
+### 3.19 `POST /me/notifications/read` *(JWT)* ✅ implementado (`me-notifications-read-raitocorp`)
 
-`UPDATE notifications SET read=true WHERE id=$1 AND user_id=$jwt.sub`
+> ⚠️ Era `PATCH /me/notifications/:id/read`. Virou POST + `id` no body.
+`UPDATE notifications SET read=true WHERE id=$1 AND user_id=sub`
 
-### 3.20 `PATCH /me/notifications/read-all` *(JWT)*
+### 3.20 `POST /me/notifications/read-all` *(JWT)* ✅ implementado (`me-notifications-readall-raitocorp`)
 
-`UPDATE notifications SET read=true WHERE user_id=$jwt.sub AND read=false`
+`UPDATE notifications SET read=true WHERE user_id=sub AND read=false`
 
-### 3.21 `DELETE /me/notifications/:id` *(JWT)*
+### 3.21 `POST /me/notifications/delete` *(JWT)* ✅ implementado (`me-notifications-delete-raitocorp`)
+
+> ⚠️ Era `DELETE /me/notifications/:id`. Virou POST + `id` no body.
 
 ### 3.22 `POST /consultant/message` *(JWT)*
 

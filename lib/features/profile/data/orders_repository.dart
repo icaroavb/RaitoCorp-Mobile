@@ -45,10 +45,28 @@ class OrdersRepository {
     return OrderEntity.fromJson(res);
   }
 
+  // n8n: path param :id exige webhookId na URL — por isso cancel é POST + id no
+  // body em path estático. Ver docs/N8N_API.md §3.11.
   Future<OrderEntity> cancel(String orderId) async {
-    final res =
-        await _api.patchJson('/me/orders/$orderId/cancel') as Map<String, dynamic>;
+    final res = await _api.postJson('/me/orders/cancel', body: {'id': orderId})
+        as Map<String, dynamic>;
     return OrderEntity.fromJson(res);
+  }
+
+  /// Avalia um pedido entregue. `photoUrl` opcional (já no Cloudinary).
+  /// Ver docs/N8N_API.md §3.11b.
+  Future<void> review({
+    required String orderId,
+    required int rating,
+    required String comment,
+    String? photoUrl,
+  }) async {
+    await _api.postJson('/me/orders/review', body: {
+      'order_id': orderId,
+      'rating': rating,
+      'comment': comment,
+      if (photoUrl != null) 'photo_url': photoUrl,
+    });
   }
 }
 

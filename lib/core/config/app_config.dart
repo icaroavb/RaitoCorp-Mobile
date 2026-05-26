@@ -34,6 +34,19 @@ class AppConfig {
     defaultValue: '/webhook',
   );
 
+  /// Cloudinary — upload de imagens (produtos e fotos de avaliação). O preset
+  /// é *unsigned*; nada secreto aqui (cloud name e preset são públicos por
+  /// natureza, igual à API key). Ver `CloudinaryService`.
+  static const String cloudinaryCloudName = String.fromEnvironment(
+    'CLOUDINARY_CLOUD_NAME',
+    defaultValue: 'dvt0gyhlr',
+  );
+
+  static const String cloudinaryUploadPreset = String.fromEnvironment(
+    'CLOUDINARY_UPLOAD_PRESET',
+    defaultValue: 'raitocorp-mobile',
+  );
+
   static const Duration requestTimeout = Duration(seconds: 20);
 
   /// Garante que o app não suba em produção sem URL/chave configuradas.

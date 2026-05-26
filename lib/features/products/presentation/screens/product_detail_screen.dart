@@ -362,6 +362,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('${product.name} adicionado'),
+        duration: const Duration(seconds: 3),
         action: SnackBarAction(
           label: 'Ver carrinho',
           textColor: AppColors.amber400,
@@ -697,6 +698,34 @@ class _ReviewCard extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(review.comment, style: theme.textTheme.bodyMedium),
+          if (review.photoUrl != null && review.photoUrl!.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.sm),
+            GestureDetector(
+              onTap: () => showDialog<void>(
+                context: context,
+                builder: (_) => Dialog(
+                  backgroundColor: Colors.transparent,
+                  insetPadding: const EdgeInsets.all(AppSpacing.lg),
+                  child: ClipRRect(
+                    borderRadius: AppRadius.md,
+                    child: CachedNetworkImage(imageUrl: review.photoUrl!),
+                  ),
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: AppRadius.sm,
+                child: CachedNetworkImage(
+                  imageUrl: review.photoUrl!,
+                  height: 120,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  placeholder: (_, _) => Container(
+                    height: 120, color: AppColors.gray100),
+                  errorWidget: (_, _, _) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ],
           if (review.room != null) ...[
             const SizedBox(height: AppSpacing.sm),
             Container(

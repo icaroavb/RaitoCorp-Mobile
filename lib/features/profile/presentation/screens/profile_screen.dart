@@ -106,6 +106,12 @@ class ProfileScreen extends ConsumerWidget {
                 // Menu
                 _MenuSection(
                   items: [
+                    if (user.isAdmin)
+                      _MenuEntry(
+                        icon: PhosphorIcons.gauge(),
+                        label: 'Painel Admin',
+                        onTap: () => context.push('/profile/admin'),
+                      ),
                     _MenuEntry(
                       icon: PhosphorIcons.package(),
                       label: 'Meus pedidos',

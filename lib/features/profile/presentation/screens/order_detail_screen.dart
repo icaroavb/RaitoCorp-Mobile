@@ -12,12 +12,27 @@ import '../../../../shared/extensions/number_extensions.dart';
 import '../../domain/entities/order_entity.dart';
 import '../providers/orders_provider.dart';
 
-class OrderDetailScreen extends ConsumerWidget {
+class OrderDetailScreen extends ConsumerStatefulWidget {
   final String orderId;
   const OrderDetailScreen({super.key, required this.orderId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<OrderDetailScreen> createState() => _OrderDetailScreenState();
+}
+
+class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Recarrega ao abrir pra pegar avanço de status feito pelo admin.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(ordersProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final orderId = widget.orderId;
     final order = ref.watch(orderByIdProvider(orderId));
     final theme = Theme.of(context);
 

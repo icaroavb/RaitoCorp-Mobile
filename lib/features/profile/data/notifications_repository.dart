@@ -15,16 +15,18 @@ class NotificationsRepository {
         .toList();
   }
 
+  // n8n: path param :id exige webhookId na URL — por isso read/delete são POST +
+  // id no body em path estático. Ver docs/N8N_API.md §3.19-3.21.
   Future<void> markAsRead(String id) async {
-    await _api.patchJson('/me/notifications/$id/read');
+    await _api.postJson('/me/notifications/read', body: {'id': id});
   }
 
   Future<void> markAllAsRead() async {
-    await _api.patchJson('/me/notifications/read-all');
+    await _api.postJson('/me/notifications/read-all');
   }
 
   Future<void> remove(String id) async {
-    await _api.deleteJson('/me/notifications/$id');
+    await _api.postJson('/me/notifications/delete', body: {'id': id});
   }
 }
 

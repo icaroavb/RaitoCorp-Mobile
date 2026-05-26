@@ -79,7 +79,12 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
         : defaultAddr;
 
     final shipping = 0.0;
-    final discount = _paymentMethod == PaymentMethod.pix ? subtotal * 0.05 : 0.0;
+    // 1ª compra = usuário ainda não tem nenhum pedido → 10% de boas-vindas.
+    final isFirstPurchase = ref.watch(userOrdersProvider).isEmpty;
+    final pixDiscount =
+        _paymentMethod == PaymentMethod.pix ? subtotal * 0.05 : 0.0;
+    final firstPurchaseDiscount = isFirstPurchase ? subtotal * 0.10 : 0.0;
+    final discount = pixDiscount + firstPurchaseDiscount;
     final total = subtotal + shipping - discount;
 
     return Scaffold(
@@ -223,10 +228,16 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                         ? 'Grátis'
                         : shipping.formatCurrency(),
                     valueColor: AppColors.success),
-                if (discount > 0)
+                if (firstPurchaseDiscount > 0)
+                  _Line(
+                    label: 'Desconto 1ª compra (10%)',
+                    value: '- ${firstPurchaseDiscount.formatCurrency()}',
+                    valueColor: AppColors.success,
+                  ),
+                if (pixDiscount > 0)
                   _Line(
                     label: 'Desconto Pix (5%)',
-                    value: '- ${discount.formatCurrency()}',
+                    value: '- ${pixDiscount.formatCurrency()}',
                     valueColor: AppColors.success,
                   ),
                 const Divider(height: 20),

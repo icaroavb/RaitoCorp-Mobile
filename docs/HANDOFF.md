@@ -1,103 +1,87 @@
 # HANDOFF — Estado do projeto (atualizado 2026-05-25)
 
-> Documento de retomada. Leia isto primeiro ao continuar o trabalho — evita
-> redescobrir tudo do zero. Mantenha atualizado ao fim de cada sessão.
+> Documento de retomada. Leia isto primeiro ao continuar o trabalho.
+> Contrato completo dos endpoints em [`N8N_API.md`](./N8N_API.md).
 
 ## Contexto geral
 
-App Flutter (Raitõ — loja de iluminação) migrando de **dados mock → API real
-via n8n**. O n8n é o gateway/regras de negócio entre o app e o Postgres; o app
-nunca fala direto com o banco. Contrato completo em [`N8N_API.md`](./N8N_API.md).
+App Flutter (Raitõ — loja de iluminação), TCC. Backend **100% em n8n + Postgres**
+— o app nunca fala direto com o banco, só via webhooks (`https://n8n.raitocorp.com.br/webhook/...`).
+n8n roda na máquina de um colega via Cloudflare, acessível por **MCP** (sem
+acesso ao host nem ao Postgres direto).
 
-- n8n: `https://n8n.raitocorp.com.br` (roda na máquina de um colega, via
-  Cloudflare). Acessível por **MCP** (workflows/data tables) — **sem** acesso
-  ao host nem ao Postgres direto.
-- Repo: branch `main`, só existe o commit inicial. **Nada commitado ainda** —
-  toda a migração está como working changes.
+Arquitetura do app: feature-first (`lib/features/<feature>/{data,domain,presentation}`),
+Riverpod pra estado, go_router pra navegação, `ApiClient` central
+(`lib/core/api/`) injetando X-API-Key + Bearer JWT. Defaults de produção em
+`app_config.dart` → `flutter run` puro já funciona, sem `--dart-define`.
 
-## ⚠️ Restrições críticas da instância n8n (hardened)
+## Credenciais / configs
 
-A instância bloqueia coisas que o desenho original assumia. **Três tentativas
-falharam** antes de achar o caminho:
+| O quê | Valor |
+|---|---|
+| Cliente teste | `teste@raito.com` / `teste1234` |
+| **Admin** | `admin@raito.com` / `admin1234` (is_admin=true) |
+| APP_API_KEY (X-API-Key, pública) | `raito_81f96262486efad255c453798b769d0ce9c5eb057772f5c2` |
+| JWT_SECRET (HS256, só no servidor) | `bj6VFq3FcdWYVl4Mv-3_fDSbGesnSfjHdVOq8VoFqfshrZo0W7x3tZPHTztc-3sl` |
+| Cloudinary | cloud `dvt0gyhlr` · unsigned preset `raitocorp-mobile` |
 
-| Bloqueio | Sintoma | Consequência |
-|---|---|---|
-| `N8N_BLOCK_ENV_ACCESS_IN_NODE` | "access to env vars denied" | `$env` não funciona em nó IF/Code/expressão. Setar env var no host NÃO adianta. |
-| `NODE_FUNCTION_ALLOW_BUILTIN` | "Module 'crypto' is disallowed" | nó Code não pode `require('crypto')`. |
-| Header Auth credential | — | só injeta header em HTTP de saída; não dá pra ler valor cru em IF/Code. |
+## ⚠️ Restrições da instância n8n (hardened) — regras que moldam tudo
 
-**Solução adotada:** verificação de senha (bcrypt) + geração de JWT (HS256)
-**100% em SQL via `pgcrypto`** (`crypt`/`gen_salt('bf')`/`hmac`), num nó Postgres.
-Sem nó Code. Segredos **hardcoded** nos workflows (temporário).
-
-→ **Regra:** ao criar qualquer workflow de auth aqui, NÃO use `$env` nem
-`require()` em Code. Faça crypto em SQL.
+- `$env` bloqueado em nós; `require('crypto')` bloqueado em Code. → Auth (bcrypt +
+  JWT HS256) feito **100% em SQL via `pgcrypto`**, sem nó Code. Segredos hardcoded.
+- `queryReplacement` do nó Postgres é CSV: **valor vazio é descartado** → erro
+  "no parameter $N". Solução: sentinela `__NULL__` + `nullif($n,'__NULL__')`.
+- Webhook com **path param `:id` exige o webhookId na URL** (que o app não tem).
+  Solução: endpoints de mutação usam **POST + id no body** + path estático
+  (ex: `/me/orders/cancel`, `/me/addresses/delete`, `/admin/products/update`).
+- **CTE única: INSERT irmão NÃO é visível ao SELECT final** (mesmo snapshot).
+  Pra responder dados recém-inseridos, montar a resposta dos dados de ENTRADA,
+  não relendo o banco. NÃO usar `SELECT INTO TEMP` (vaza entre requests no pool).
 
 ## Postgres
 
-- Credential no n8n chama-se **`Postgres account`** (não "Raitocorp Postgres"
-  como diz uma sticky antiga). Referenciar via `newCredential('Postgres account')`.
-- Extensions habilitadas: `pgcrypto`, `citext`.
-- Tabela `users` criada e verificada. Demais tabelas do schema (§2 do
-  N8N_API.md) **ainda NÃO criadas**.
+- Credential no n8n: **`Postgres account`**. Extensions: `pgcrypto`, `citext`.
+- Tabelas criadas: `users` (+ `google_sub`), `addresses`, `products`, `reviews`
+  (+ `photo_url`), `orders`, `order_items`, `order_timeline`, `user_favorites`,
+  `notifications`. Seed: 4+ produtos, 2 notifs do usuário teste.
 
-## Segredos (hardcoded temporariamente nos workflows)
+## Workflows n8n — TODOS ativos e testados end-to-end
 
-```
-APP_API_KEY = raito_81f96262486efad255c453798b769d0ce9c5eb057772f5c2
-JWT_SECRET  = bj6VFq3FcdWYVl4Mv-3_fDSbGesnSfjHdVOq8VoFqfshrZo0W7x3tZPHTztc-3sl
-```
-- `APP_API_KEY` também precisa ir no build do app: `--dart-define=N8N_API_KEY=...`
-- `JWT_SECRET` é segredo de servidor — nunca vai pro app.
-- **Antes de prod:** mover pra tabela `app_secrets` (lida via Postgres) ou pedir
-  ao admin liberar `$env`/`crypto`.
+Auth: `login-raitocorp`, `register-raitocorp`, `auth-google-raitocorp`.
+Perfil: `me-get`, `me-patch`. Endereços: `me-addresses-get/post/delete/default`.
+Catálogo (público): `products-get`, `products-detail`, `products-reviews`.
+Favoritos: `me-favorites-get/toggle`. Notificações: `me-notifications-get/read/readall/delete`.
+Pedidos: `me-orders-get/post/cancel/review`.
+Admin (valida is_admin no SQL): `admin-orders-get/advance`,
+`admin-products-create/update/delete`.
 
-## Workflows n8n
+Migrações temporárias já arquivadas (apagar de vez na UI do n8n, filtro Archived).
 
-| Workflow | ID | Estado |
-|---|---|---|
-| **login-raitocorp** (válido) | `6y56Z2bgqBERtPAr` | ✅ testado, **inativo** (falta publish) |
-| chatbot RaitoCorp | `LkLWXSX81vteUD8q` | ativo (pré-existente, não mexido) |
+## App Flutter — completo
 
-**Login testado end-to-end:** cred correta → 200+JWT (assinatura verificada);
-senha errada → 401; api key errada → 401. JWT HS256 válido.
+Todas as features cabeadas e batendo na API real: auth (incl. Google*), perfil,
+endereços, catálogo, favoritos, notificações, pedidos, **hub admin** (CRUD de
+produtos + avançar pedidos, em `lib/features/admin/`, gated por `is_admin` no
+profile), **review do cliente** com foto (`review_order_screen.dart`).
+Upload de imagem via Cloudinary (`lib/core/upload/cloudinary_service.dart`).
+`flutter analyze`: 0 erros (só lints de estilo).
 
-**Usuário de teste:** `teste@raito.com` / `teste1234` (hash bcrypt na tabela).
+\* Login Google: backend pronto, mas precisa de config no Google Cloud Console
+(origin/SHA-1) — ver ressalva abaixo.
 
-### Workflows pra DELETAR pela UI do n8n
-MCP só arquiva (não deleta permanente). Já arquivados — apagar de vez no painel
-(filtro "Archived" → Delete). Manter SÓ o `6y56Z2bgqBERtPAr`.
-- Logins antigos quebrados: `OnJsbboTT6q8uTy7`, `xfcAAb4qURUtt93n`
-- Descartáveis: `fwOvpdon6Xkj2u9X` (setup-users), `1NYpFeEn3kZTrJ2E` (check-env),
-  `TapN5bmyuk0Otl4t` (seed-user), `VmOifzym226Lq9hx` (probe-pgcrypto),
-  `V4KRqUgeupnymRm7` (reseed-bcrypt), `WgfgwVKYTrZmku1E` (jwt-probe)
+## Build / distribuição
 
-## Código Flutter (camada de API)
+- Android SDK instalado em `C:\Users\Icaro\AppData\Local\Android\Sdk`
+  (cmdline-tools + platform-tools + android-36 + build-tools 36.0.0). Java 21.
+- APK release: `flutter build apk --release` → `build/app/outputs/flutter-apk/app-release.apk`,
+  assinado com debug key (instala em qualquer Android com "fontes desconhecidas").
+- Ícone: lâmpada âmbar (`tool/gen_icon.dart` + `gen_icon_fg.dart`),
+  `flutter_launcher_icons` no pubspec.
 
-Já criado e compila limpo (`flutter analyze`: 0 erros, ~20 lints de estilo):
-- `lib/core/config/app_config.dart` — config via `--dart-define`
-- `lib/core/api/` — api_client, api_exception, api_providers, auth_storage (JWT)
-- `lib/features/*/data/*_repository.dart` — repos de auth, consultant, products,
-  profile (addresses/favorites/notifications/orders)
-- Entities ganharam `fromJson`/`toJson`; providers consomem repos; mocks deletados.
+## Pendências
 
-## Próximos passos (em aberto)
-
-1. **Ativar (publish)** o login-raitocorp quando quiser produção.
-2. Criar workflow **register** (`POST /auth/register`) — mesmo padrão SQL/pgcrypto
-   (INSERT com `crypt($3, gen_salt('bf',12))` + JWT em SQL).
-3. Criar as **demais tabelas** do schema (§2 N8N_API.md) e os endpoints
-   protegidos (`/me/*`, products, orders, etc.).
-4. Resolver upload de imagem do consultor (§3.23 — TODO no contrato).
-5. Mover segredos pra solução não-hardcoded.
-6. Limitação conhecida: o nó Postgres do login usa `queryReplacement` separado
-   por vírgula → email/senha não podem conter vírgula. Trocar por params reais
-   se virar problema.
-7. Commitar a migração (nada commitado ainda).
-
-## Notas técnicas úteis
-
-- base64url em SQL: `replace(replace(translate(encode(x,'base64'),'+/','-_'),'=',''), E'\n','')`
-- Verificar JWT localmente: decodificar e comparar `hmac(header.payload, secret, sha256)`.
-- O MCP `update_workflow` corrompeu o login uma vez (injetou `jwtAuth` no webhook,
-  reverteu nós). **Preferir arquivar + recriar** a dar update em workflows críticos.
+1. **Consultor IA** (`/consultant/*`) — um colega do usuário faz. NÃO mexer.
+2. **Login Google** — `origin_mismatch`/SHA-1 no Google Cloud Console (projeto
+   `raitocorp-e46a7`). Email/senha funciona; Google precisa dessa config externa.
+3. **Commit** — muita coisa ainda como working changes (combinar com o usuário).
+4. Segredos hardcoded e debug-signing: OK pra TCC; trocar antes de prod real.

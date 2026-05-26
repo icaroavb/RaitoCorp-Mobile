@@ -11,6 +11,7 @@ class ReviewEntity extends Equatable {
   final DateTime date;
   final Room? room;
   final bool hasPhoto;
+  final String? photoUrl;
 
   const ReviewEntity({
     required this.id,
@@ -21,6 +22,7 @@ class ReviewEntity extends Equatable {
     required this.date,
     this.room,
     this.hasPhoto = false,
+    this.photoUrl,
   });
 
   factory ReviewEntity.fromJson(Map<String, dynamic> json) {
@@ -36,6 +38,7 @@ class ReviewEntity extends Equatable {
           ? null
           : _enumFromString(Room.values, json['room'] as String?, Room.living),
       hasPhoto: json['has_photo'] as bool? ?? false,
+      photoUrl: json['photo_url'] as String?,
     );
   }
 
@@ -48,6 +51,7 @@ class ReviewEntity extends Equatable {
         'date': date.toUtc().toIso8601String(),
         if (room != null) 'room': room!.name,
         'has_photo': hasPhoto,
+        if (photoUrl != null) 'photo_url': photoUrl,
       };
 
   static String _initials(String name) {

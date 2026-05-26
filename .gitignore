@@ -70,3 +70,7 @@ app.*.map.json
 # SO / editor
 Thumbs.db
 *.tmp
+
+# APK/artefatos de build gerados (distribuir fora do git)
+*.apk
+*.aab

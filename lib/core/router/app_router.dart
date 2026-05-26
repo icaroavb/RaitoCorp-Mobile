@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/admin/presentation/screens/admin_hub_screen.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/register_screen.dart';
 import '../../features/cart/presentation/screens/cart_screen.dart';
@@ -17,6 +18,7 @@ import '../../features/profile/presentation/screens/my_data_screen.dart';
 import '../../features/profile/presentation/screens/notifications_screen.dart';
 import '../../features/profile/presentation/screens/order_detail_screen.dart';
 import '../../features/profile/presentation/screens/orders_screen.dart';
+import '../../features/profile/presentation/screens/review_order_screen.dart';
 import '../../features/profile/presentation/screens/profile_screen.dart';
 import '../../features/profile/presentation/screens/reviews_screen.dart';
 import '../widgets/main_shell.dart';
@@ -91,6 +93,16 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: '/profile/notifications',
             pageBuilder: (_, _) => _slidePage(const NotificationsScreen()),
+          ),
+          GoRoute(
+            path: '/profile/admin',
+            pageBuilder: (_, _) => _slidePage(const AdminHubScreen()),
+          ),
+          GoRoute(
+            path: '/profile/orders/:id/review',
+            pageBuilder: (_, state) => _slidePage(
+              ReviewOrderScreen(orderId: state.pathParameters['id']!),
+            ),
           ),
 
           // ── Checkout — dentro do shell para manter a nav ─────────────────

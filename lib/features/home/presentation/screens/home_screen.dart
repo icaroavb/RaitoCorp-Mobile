@@ -165,6 +165,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text('${product.name} adicionado'),
+                            duration: const Duration(seconds: 3),
                             action: SnackBarAction(
                               label: 'Ver carrinho',
                               textColor: AppColors.amber400,
@@ -195,8 +196,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xxl)),
             const SliverToBoxAdapter(child: _AiCtaBanner()),
             const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.xxl)),
-            const SliverToBoxAdapter(child: _FirstPurchaseBanner()),
-            const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.huge)),
+            // Banner de criar conta / 1ª compra: só pra quem NÃO está logado.
+            if (user == null) ...[
+              const SliverToBoxAdapter(child: _FirstPurchaseBanner()),
+              const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.huge)),
+            ],
           ],
         ),
       ),

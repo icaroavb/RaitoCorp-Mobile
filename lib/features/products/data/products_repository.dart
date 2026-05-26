@@ -16,14 +16,17 @@ class ProductsRepository {
         .toList();
   }
 
+  // n8n: webhook com path param dinamico (:id) exige o webhookId na URL — por
+  // isso detalhe e reviews usam query string. Ver docs/N8N_API.md §3.7/§3.8.
   Future<ProductEntity> fetchById(String id) async {
-    final res = await _api.getJson('/products/$id', auth: false) as Map<String, dynamic>;
+    final res = await _api.getJson('/products/detail',
+        query: {'id': id}, auth: false) as Map<String, dynamic>;
     return ProductEntity.fromJson(res);
   }
 
   Future<List<ReviewEntity>> fetchReviews(String productId) async {
-    final res = await _api.getJson('/products/$productId/reviews', auth: false)
-        as List;
+    final res = await _api.getJson('/products/reviews',
+        query: {'id': productId}, auth: false) as List;
     return res
         .map((e) => ReviewEntity.fromJson(e as Map<String, dynamic>))
         .toList();
