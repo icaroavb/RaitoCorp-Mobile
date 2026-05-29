@@ -13,6 +13,13 @@ import '../../domain/entities/message_entity.dart';
 const _consultantBox = 'consultant_box';
 const _sessionKey = 'session_id';
 
+/// Chave (em `consultant_box`) onde guardamos os previews que estouraram o tempo
+/// e ainda têm um `task_id` processando no servidor. Diferente do preview pronto
+/// (que o servidor salva em `chat_messages`), a mensagem de "tentar novamente" é
+/// só do cliente — sem persistir aqui, ela some ao fechar o app e o usuário perde
+/// o `task_id`. Guardamos por sessão: `{ sessionId: [ {productId, taskId}, ... ] }`.
+const _pendingRetriesKey = 'pending_retries';
+
 final _sessionIdProvider = Provider<String>((_) {
   final box = Hive.box<dynamic>(_consultantBox);
   var sid = box.get(_sessionKey) as String?;
@@ -45,14 +52,38 @@ class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
   /// Ao abrir, busca o histórico da sessão no servidor e o exibe — assim o
   /// usuário reencontra a conversa (incluindo previews gerados com o app
   /// fechado, que ficam salvos no banco mesmo sem o app rodando o polling).
+  ///
+  /// Também reidrata as mensagens de "tentar novamente" salvas localmente
+  /// (previews que estouraram o tempo e ainda processam no servidor): se aquele
+  /// produto ainda não tem imagem no histórico, recolocamos o botão de retry.
   Future<void> _loadHistory() async {
+    List<MessageEntity> history = const [];
     try {
-      final history = await _repo.fetchHistory(_sessionId);
-      if (history.isNotEmpty) {
-        state = [_welcome(), ...history];
-      }
+      history = await _repo.fetchHistory(_sessionId);
     } catch (_) {
-      // sem histórico / offline → mantém só a saudação
+      // sem histórico / offline → segue só com a saudação (+ retries locais)
+    }
+
+    final retries = _readPendingRetries();
+    final retryMsgs = <MessageEntity>[];
+    if (retries.isNotEmpty) {
+      // Se já existe uma imagem de preview no histórico do servidor, a geração
+      // concluiu enquanto o app estava fechado → descartamos o retry pendente.
+      final hasReadyPreview =
+          history.any((m) => m.type == MessageType.image && m.author == MessageAuthor.bot);
+      final stillPending = <Map<String, String>>[];
+      for (final r in retries) {
+        if (hasReadyPreview) continue;
+        retryMsgs.add(_retryMessage(r['productId']!, r['taskId']));
+        stillPending.add(r);
+      }
+      if (stillPending.length != retries.length) {
+        _writePendingRetries(stillPending);
+      }
+    }
+
+    if (history.isNotEmpty || retryMsgs.isNotEmpty) {
+      state = [_welcome(), ...history, ...retryMsgs];
     }
   }
 
@@ -231,18 +262,25 @@ class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
 
     if (status.state == PreviewState.ready && status.message != null) {
       _replaceGen(genId, status.message!);
+      _clearPersistedRetry(productId); // concluiu → não precisa mais do retry
     } else {
       // Ainda processando ou falhou → oferece retry com o último task_id.
       _showRetry(genId, productId, status.taskId);
     }
   }
 
-  /// Mensagem de "demorou/falhou" com os dados pra o botão de retry.
+  /// Mensagem de "demorou/falhou" com os dados pro botão de retry.
   void _showRetry(String genId, String productId, String? taskId) {
-    _replaceGen(
-      genId,
-      MessageEntity(
-        id: '${genId}_retry',
+    _replaceGen(genId, _retryMessage(productId, taskId));
+    // Persiste pra sobreviver ao fechamento do app (só se há task_id pra retomar).
+    if (taskId != null && taskId.isNotEmpty) {
+      _persistRetry(productId, taskId);
+    }
+  }
+
+  /// Constrói a bolha de "tentar novamente" (usada ao gerar e ao reidratar).
+  MessageEntity _retryMessage(String productId, String? taskId) => MessageEntity(
+        id: '${productId}_retry',
         author: MessageAuthor.bot,
         type: MessageType.text,
         text:
@@ -250,9 +288,7 @@ class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
         retryTaskId: taskId,
         retryProductId: productId,
         createdAt: DateTime.now(),
-      ),
-    );
-  }
+      );
 
   MessageEntity _botText(String id, String text) => MessageEntity(
         id: id,
@@ -278,7 +314,54 @@ class ConsultantNotifier extends StateNotifier<List<MessageEntity>> {
     } catch (_) {
       // mesmo se falhar no servidor, limpa localmente
     }
+    _writePendingRetries(const []); // descarta retries pendentes desta sessão
     state = [_welcome()];
+  }
+
+  // ── Persistência local das retries pendentes (Hive `consultant_box`) ──────
+  // Formato: { sessionId: [ {productId, taskId}, ... ] }. Chaveado por sessão
+  // porque a box é compartilhada (também guarda o session_id).
+
+  Box<dynamic> get _box => Hive.box<dynamic>(_consultantBox);
+
+  List<Map<String, String>> _readPendingRetries() {
+    final all = _box.get(_pendingRetriesKey);
+    if (all is! Map) return const [];
+    final list = all[_sessionId];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => {
+              'productId': e['productId'].toString(),
+              'taskId': e['taskId'].toString(),
+            })
+        .where((e) => e['productId']!.isNotEmpty && e['taskId']!.isNotEmpty)
+        .toList();
+  }
+
+  void _writePendingRetries(List<Map<String, String>> retries) {
+    final raw = _box.get(_pendingRetriesKey);
+    final all = (raw is Map) ? Map<dynamic, dynamic>.from(raw) : <dynamic, dynamic>{};
+    if (retries.isEmpty) {
+      all.remove(_sessionId);
+    } else {
+      all[_sessionId] = retries;
+    }
+    _box.put(_pendingRetriesKey, all);
+  }
+
+  void _persistRetry(String productId, String taskId) {
+    final retries = _readPendingRetries()
+        .where((e) => e['productId'] != productId) // 1 por produto (atualiza task)
+        .toList()
+      ..add({'productId': productId, 'taskId': taskId});
+    _writePendingRetries(retries);
+  }
+
+  void _clearPersistedRetry(String productId) {
+    final retries =
+        _readPendingRetries().where((e) => e['productId'] != productId).toList();
+    _writePendingRetries(retries);
   }
 }
 
