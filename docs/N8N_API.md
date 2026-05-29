@@ -1,12 +1,40 @@
 # Contrato da API n8n — Raitõ Mobile
 
-Este documento define todos os webhooks que o app Flutter espera consumir.
+Este documento define todos os webhooks que o app Flutter consome.
 O n8n age como API gateway e camada de regras de negócio entre o app e o
 Postgres — **o app nunca conecta direto no banco**.
 
 > Base URL (produção): `https://n8n.raitocorp.com.br`
 > Prefixo padrão dos webhooks: `/webhook`
 > Em modo de teste do n8n use `/webhook-test` (configurável em [app_config.dart](../lib/core/config/app_config.dart) via `--dart-define=N8N_WEBHOOK_PREFIX`)
+
+> **Estado atual (2026-05-29):** os **33 workflows estão ativos e publicados** em
+> produção, incluindo o Consultor IA (`/consultant/*`). Lista completa com IDs no
+> apêndice ao final deste documento; visão de arquitetura para a apresentação em
+> [`ARQUITETURA.md`](./ARQUITETURA.md).
+
+## Anatomia de um workflow (padrão canônico)
+
+Todos os endpoints protegidos seguem a mesma topologia de nós no n8n — entender
+um é entender os 33:
+
+```
+Webhook (POST /rota)
+   → IF "Check X-API-Key"  ── falso ──▶ Respond 401 (Invalid API key)
+        │ verdadeiro
+   → Postgres "executeQuery"      (valida JWT em SQL + faz a regra de negócio
+        │                          numa CTE única; devolve statusCode + body)
+   → IF "statusCode == 200"  ── falso ──▶ Respond Err (422/401/404 + message)
+        │ verdadeiro
+   → Respond 200 (body)
+```
+
+A **autenticação acontece dentro do SQL**: a query recebe o header
+`Authorization` como parâmetro, separa o JWT em `header.payload.assinatura`,
+recalcula o HMAC-SHA256 com o secret, compara com a assinatura recebida, decodifica
+o payload base64url e checa o `exp`. Só então usa o `sub` (= `user_id`) nas
+operações. Não há nó Code para auth — a instância n8n bloqueia `require('crypto')`
+e `$env` (ver §1).
 
 ---
 
@@ -48,9 +76,9 @@ Cada webhook protegido deve ter, antes do nó Postgres:
 | POST | `/auth/register` | Cria conta com email/senha + devolve JWT | ✅ `register-raitocorp` |
 | POST | `/auth/login` | Valida credenciais + devolve JWT | ✅ `login-raitocorp` |
 | POST | `/auth/google` | Troca id_token do Google por JWT Raitõ | ✅ `auth-google-raitocorp` |
-| GET | `/products` | Lista pública do catálogo |
-| GET | `/products/:id` | Detalhe público |
-| GET | `/products/:id/reviews` | Reviews públicas |
+| GET | `/products` | Lista pública do catálogo | ✅ `products-get-raitocorp` |
+| GET | `/products/detail?id=` | Detalhe público | ✅ `products-detail-raitocorp` |
+| GET | `/products/reviews?id=` | Reviews públicas | ✅ `products-reviews-raitocorp` |
 
 ### Endpoints protegidos (JWT obrigatório)
 
@@ -524,21 +552,33 @@ Array de notificações do usuário ordenado por `created_at DESC`. `user_email`
 
 > ⚠️ Era `DELETE /me/notifications/:id`. Virou POST + `id` no body.
 
-### 3.22 `POST /consultant/message` *(JWT)*
+> **Consultor IA — stack de modelos (toda no ModelScope).** Os endpoints abaixo
+> usam a inferência da **ModelScope** (Alibaba) via nó HTTP Request, e **não**
+> nós langchain (a instância os descarta no import via SDK) nem Gemini (free tier
+> só 20 req/dia). Um único token serve os três modelos:
+>
+> | Endpoint | Modelo ModelScope | Papel |
+> |---|---|---|
+> | `/consultant/message` | `Qwen2.5-72B-Instruct` | Chat (texto) |
+> | `/consultant/image` | `Qwen2.5-VL-72B-Instruct` | Visão (classifica o ambiente) |
+> | `/consultant/preview` | `Qwen-Image-Edit-2509` | Edição de imagem (relight) |
+
+### 3.22 `POST /consultant/message` *(JWT)* ✅ implementado (`consultant-message-raitocorp`)
 
 **Request:**
 ```json
 { "session_id": "sess-123", "text": "Como ilumino meu quarto?" }
 ```
 
-**Workflow:**
-1. Upsert `chat_sessions(id, user_id)`.
-2. Insert `chat_messages` (author=user).
-3. Busca histórico recente (últimas 10 msgs) pra contexto.
-4. Chama LLM (OpenAI/Anthropic) com prompt do "Consultor Raitõ" + histórico + lista resumida do catálogo.
-5. Parse resposta — se contém recomendações, extrai product_ids.
-6. Insert `chat_messages` (author=bot).
-7. Retorna a mensagem do bot:
+**Workflow (`gPCSDVibMq8ZEsfI`):**
+1. Valida X-API-Key + JWT; salva a mensagem do usuário em `chat_messages`.
+2. No mesmo SQL, monta o contexto: catálogo resumido (`lumens`,
+   `color_temperature_k`, `socket_type`, `ideal_rooms`) + últimas 10 mensagens.
+3. HTTP Request → **ModelScope `Qwen2.5-72B-Instruct`** (chat completions, formato
+   OpenAI `messages[system,user]`). O **guardrail é por prompt de sistema**
+   ("só fale de iluminação; redirecione o resto").
+4. Parseia o JSON do LLM (`{reply, product_ids}`), **valida os product_ids contra
+   `products`**, salva a resposta do bot e devolve a `MessageEntity`:
 ```json
 {
   "id": "uuid",
@@ -550,25 +590,21 @@ Array de notificações do usuário ordenado por `created_at DESC`. `user_email`
 }
 ```
 
-**Implementado (`consultant-message-raitocorp`, id `gPCSDVibMq8ZEsfI`):**
-Decisão de arquitetura — virou **AI Agent** (a montar na UI; ver nota abaixo).
-A casca (auth + log + Save bot msg + respond) está no SDK; o **Railguards**
-(Guardrails classify: jailbreak + nsfw + topical alignment "só iluminação") e o
-**AI Agent** (Gemini Chat + Postgres Chat Memory + Postgres Tool catálogo +
-Output Parser `{reply, product_ids}`) precisam ser arrastados no editor entre
-`Authorized?` e `Save bot msg` — esta instância **descarta nós langchain no
-import via SDK**. O `Save bot msg` já lê `$node["Consultor Raito"].json.output`.
+> **Gotcha:** o JSON do LLM tem vírgulas e quebrava o `queryReplacement` CSV.
+> Solução: passar o `queryReplacement` como **array** `={{ [sid, content] }}`.
 
 ### 3.23 `POST /consultant/image` *(JWT)* ✅ implementado (`consultant-image-raitocorp`)
 
-Estratégia de upload definida: **Cloudinary** (Opção A). O app sobe a foto pro
-Cloudinary (`CloudinaryService`) e manda a `secure_url` no `image_path`. O n8n
-baixa a URL, manda a imagem inline pro **Gemini 2.5 Flash** classificar o
-ambiente nos enums do `ProductEntity` (`room`/`light_temperature`/
-`brightness_level`), faz scoring SQL e recomenda **top 3** (nunca vazio). Se a
-foto não der pra classificar, devolve os top-rated + texto pedindo contexto.
+O app sobe a foto do ambiente pro **Cloudinary** (`CloudinaryService`) e manda a
+`secure_url` em `image_path` (+ `text` opcional). O n8n passa a URL **direto** pro
+**ModelScope `Qwen2.5-VL-72B-Instruct`** (visão, formato OpenAI
+`content:[{type:text},{type:image_url}]`), que classifica o ambiente nos enums do
+`ProductEntity` (`room`/`light_temperature`/`brightness_level`) considerando
+também o texto do cliente. Em seguida um scoring SQL recomenda **top 3** (nunca
+vazio). URLs Cloudinary acima de 2048px são encolhidas (`w_1024,h_1024,c_limit`)
+para não estourar o limite de entrada do modelo.
 
-**Request:** `{ "session_id": "...", "image_path": "<url Cloudinary>" }`
+**Request:** `{ "session_id": "...", "image_path": "<url Cloudinary>", "text": "<opcional>" }`
 **Response:** `MessageEntity` (`type: productRecommendation`).
 
 ### 3.24 `GET /consultant/sessions?id=` *(JWT)* ✅ implementado (`consultant-sessions-raitocorp`)
@@ -576,22 +612,48 @@ foto não der pra classificar, devolve os top-rated + texto pedindo contexto.
 > ⚠️ Era `/consultant/sessions/:id` — path param `:id` não funciona no n8n.
 > Virou **query string** `?id=`.
 
-Histórico de uma sessão (pra retomar conversa). Array de `MessageEntity`.
+Histórico de uma sessão (pra retomar conversa). Array de `MessageEntity`. O
+`session_id` é persistido no app (Hive box `consultant_box`) e reusado entre
+aberturas — assim previews gerados com o app fechado aparecem ao reabrir.
 
 ### 3.25 `POST /consultant/preview` *(JWT)* ✅ implementado (`consultant-preview-raitocorp`)
 
 Preview "produto no meu ambiente": funde a **última foto do ambiente** da sessão
-com a foto do **produto** usando o **Gemini 2.5 Flash Image (nano banana)** e
-sobe o resultado pro Cloudinary. **Limite de 2/dia por usuário** (tabela
-`preview_usage`, reset à meia-noite UTC).
+com a foto do **produto** usando o **ModelScope `Qwen-Image-Edit-2509`** e sobe o
+resultado pro Cloudinary. **Limite de 2/dia por usuário** (tabela `preview_usage`,
+reset à meia-noite UTC).
 
-**Request:** `{ "session_id": "...", "product_id": "uuid" }`
-**Response 200:** `MessageEntity` (`type: image`, `image_path` = URL do preview).
+**Arquitetura: assíncrono com polling.** A geração da imagem leva 2-4 min, e o
+Cloudflare corta conexões síncronas em ~100s (erro 524). O mesmo endpoint tem dois
+modos, decididos por um `IF "Tem task_id?"`:
+
+- **1ª chamada (sem `task_id`):** valida auth + limite + fontes (foto e produto),
+  submete a task ao ModelScope e responde **na hora** `{ "status": "processing", "task_id": "..." }`.
+- **Polling (com `task_id`):** o app reenvia o `task_id` a cada 30s (até 5 min). O
+  n8n só consulta o status (chamada curta):
+  - `SUCCEED` → sobe pro Cloudinary, salva a mensagem e responde `{ "status": "ready", "message": {MessageEntity} }`;
+  - `FAILED` → re-submete (o Qwen-Image tem ~50% de FAILED em pico) e devolve um novo `task_id`;
+  - senão `{ "status": "processing", "task_id": "..." }`.
+
+**Request:** `{ "session_id": "...", "product_id": "uuid" }` (+ `task_id` no polling)
+**Response 200:** `{ status, task_id?, message? }`.
 - **429** se o usuário já usou 2 previews hoje (mensagem amigável no body).
 - **422** se a sessão não tem foto de ambiente ("manda uma foto primeiro").
 - **404** se o produto não existe.
 
-O app trata 429/422/404 exibindo a `message` do body como mensagem do bot.
+O limite 2/dia conta apenas no submit e só registra ao salvar a imagem com sucesso.
+O design **não cola** o produto: faz um **relight** do ambiente conforme
+`light_temperature`/`brightness_level` do produto — o objetivo é mostrar como a
+*luz* dele fica no cômodo.
+
+### 3.26 `POST /consultant/clear` *(JWT)* ✅ implementado (`consultant-clear-raitocorp`)
+
+Apaga todas as `chat_messages` da sessão do usuário (limpa o histórico do
+consultor; só apaga se a sessão pertence ao `sub` do token). Mantém o Postgres
+enxuto. Botão de lixeira na AppBar do consultor.
+
+**Request:** `{ "session_id": "..." }`
+**Response 200:** `{ "success": true, "deleted": <n> }`. **401** se não autorizado.
 
 ---
 
@@ -646,3 +708,71 @@ flutter build appbundle \
 ```
 
 Crie scripts em `scripts/run-dev.ps1`, `scripts/build-prod.ps1` quando quiser parar de digitar tudo isso.
+
+---
+
+## 7. Apêndice — workflows em produção (n8n)
+
+Todos **ativos e publicados**. Nome → id → método/rota.
+
+### Autenticação (público)
+| Workflow | id | Rota |
+|---|---|---|
+| `register-raitocorp` | `hTvnolPqgqbeQ3DP` | POST `/auth/register` |
+| `login-raitocorp` | `6y56Z2bgqBERtPAr` | POST `/auth/login` |
+| `auth-google-raitocorp` | `JBp4sB6sgzB7ieIU` | POST `/auth/google` |
+
+### Perfil e endereços (JWT)
+| Workflow | id | Rota |
+|---|---|---|
+| `me-get-raitocorp` | `VOmuPZjsQyeKobKl` | GET `/me` |
+| `me-patch-raitocorp` | `v13715invO4TbADo` | PATCH `/me` |
+| `me-addresses-get-raitocorp` | `bbZeqrwnPRVhE2lu` | GET `/me/addresses` |
+| `me-addresses-post-raitocorp` | `QvhrgvsoAfSxWVL8` | POST `/me/addresses` |
+| `me-addresses-delete-raitocorp` | `a7PEjmHl5RzENX4u` | POST `/me/addresses/delete` |
+| `me-addresses-default-raitocorp` | `F0ev0x38szGkPDl4` | POST `/me/addresses/default` |
+
+### Catálogo (público)
+| Workflow | id | Rota |
+|---|---|---|
+| `products-get-raitocorp` | `FwmQxXmImVmZW7Lk` | GET `/products` |
+| `products-detail-raitocorp` | `XRS9ESAyCnVMD0pF` | GET `/products/detail?id=` |
+| `products-reviews-raitocorp` | `w7VkBaV0DvcVHadx` | GET `/products/reviews?id=` |
+
+### Favoritos e notificações (JWT)
+| Workflow | id | Rota |
+|---|---|---|
+| `me-favorites-get-raitocorp` | `4m8wPAXv93MljUVT` | GET `/me/favorites` |
+| `me-favorites-toggle-raitocorp` | `UUk1z7nlxuaAHvIQ` | POST `/me/favorites/toggle` |
+| `me-notifications-get-raitocorp` | `8HMplVWZELHNs5tT` | GET `/me/notifications` |
+| `me-notifications-read-raitocorp` | `oFERpJrQwIxmscRV` | POST `/me/notifications/read` |
+| `me-notifications-readall-raitocorp` | `BMH6IOm5FfFXKifX` | POST `/me/notifications/read-all` |
+| `me-notifications-delete-raitocorp` | `EK1kOXyS0VojEn5q` | POST `/me/notifications/delete` |
+
+### Pedidos (JWT)
+| Workflow | id | Rota |
+|---|---|---|
+| `me-orders-get-raitocorp` | `TX6z2riFALivhh8n` | GET `/me/orders` |
+| `me-orders-post-raitocorp` | `p7UJKuDEA2MYq52S` | POST `/me/orders` |
+| `me-orders-cancel-raitocorp` | `FcxcpW5QAmDT3UD8` | POST `/me/orders/cancel` |
+| `me-orders-review-raitocorp` | `FrWzhsuXGlSdUmdR` | POST `/me/orders/review` |
+
+### Admin (JWT + is_admin)
+| Workflow | id | Rota |
+|---|---|---|
+| `admin-orders-get-raitocorp` | `MZCgROEoa9xxHxAp` | GET `/admin/orders` |
+| `admin-orders-advance-raitocorp` | `kWemi06ZjPp1y8VC` | POST `/admin/orders/advance` |
+| `admin-products-create-raitocorp` | `fR2ysbmqk9HumHJy` | POST `/admin/products` |
+| `admin-products-update-raitocorp` | `4goxFoJSn70AfLZ7` | POST `/admin/products/update` |
+| `admin-products-delete-raitocorp` | `3I80njytowT4PHp2` | POST `/admin/products/delete` (soft-delete) |
+
+### Consultor IA (JWT)
+| Workflow | id | Rota |
+|---|---|---|
+| `consultant-message-raitocorp` | `gPCSDVibMq8ZEsfI` | POST `/consultant/message` |
+| `consultant-image-raitocorp` | `ZPXUabfOyQSxfRVp` | POST `/consultant/image` |
+| `consultant-preview-raitocorp` | `lX0V2tGrBSum9WvO` | POST `/consultant/preview` |
+| `consultant-sessions-raitocorp` | `oMuIhSy8ip9rwPjz` | GET `/consultant/sessions?id=` |
+| `consultant-clear-raitocorp` | `5jcfQo9VqOfpkQXU` | POST `/consultant/clear` |
+
+> Total: 32 workflows `*-raitocorp` + 1 protótipo `chatbot RaitoCorp` (legado).
