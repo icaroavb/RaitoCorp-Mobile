@@ -66,10 +66,13 @@ class ApiClient {
     });
   }
 
+  /// `timeout` sobrescreve o padrão para chamadas lentas (ex.: o preview do
+  /// consultor gera imagem no ModelScope e leva 1-2 min — ver `ConsultantRepository`).
   Future<dynamic> postJson(
     String path, {
     Object? body,
     bool auth = true,
+    Duration? timeout,
   }) async {
     return _send(() async {
       return _http
@@ -78,7 +81,7 @@ class ApiClient {
             headers: await _headers(auth: auth),
             body: body == null ? null : jsonEncode(body),
           )
-          .timeout(AppConfig.requestTimeout);
+          .timeout(timeout ?? AppConfig.requestTimeout);
     });
   }
 

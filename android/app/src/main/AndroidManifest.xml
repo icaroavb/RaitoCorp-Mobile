@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Salvar imagem do preview na galeria (gal). Android <=12 usa WRITE; 13+ usa o MediaStore. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <application
-        android:label="raitocorp_mobile"
+        android:label="RaitoCorp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

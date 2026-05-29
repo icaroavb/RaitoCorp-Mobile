@@ -9,6 +9,8 @@ import 'core/notifications/local_notifications.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
+  // Box do consultor: guarda o session_id pra retomar a conversa entre aberturas.
+  await Hive.openBox<dynamic>('consultant_box');
   await initializeDateFormatting('pt_BR');
   // Notificações locais (atualizações de pedido). Não bloqueia o boot se falhar.
   try {

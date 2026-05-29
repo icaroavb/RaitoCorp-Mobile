@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:equatable/equatable.dart';
 
 enum MessageAuthor { user, bot }
@@ -13,6 +15,21 @@ class MessageEntity extends Equatable {
   final List<String> productRecommendations;
   final DateTime createdAt;
 
+  /// Bytes da foto recém-escolhida, só pra exibir a bolha local antes do
+  /// upload. Funciona em web (sem filesystem) via Image.memory. Não trafega
+  /// pra API — o servidor só conhece image_path (URL Cloudinary).
+  final Uint8List? localBytes;
+
+  /// Placeholder de "preview sendo gerado": a UI mostra um quadrado com loading
+  /// no lugar da imagem. Só local, não vem da API. Ver `ConsultantNotifier.sendPreview`.
+  final bool isGenerating;
+
+  /// Quando o preview esgota o tempo (ainda processando no servidor), a UI mostra
+  /// um botão "Tentar novamente" que retoma o polling deste mesmo `retryTaskId`.
+  /// Só local. `retryProductId` é necessário pro reenvio.
+  final String? retryTaskId;
+  final String? retryProductId;
+
   const MessageEntity({
     required this.id,
     required this.author,
@@ -21,6 +38,10 @@ class MessageEntity extends Equatable {
     this.imagePath,
     this.productRecommendations = const [],
     required this.createdAt,
+    this.localBytes,
+    this.isGenerating = false,
+    this.retryTaskId,
+    this.retryProductId,
   });
 
   factory MessageEntity.fromJson(Map<String, dynamic> json) => MessageEntity(

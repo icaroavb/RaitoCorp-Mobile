@@ -550,16 +550,48 @@ Array de notificações do usuário ordenado por `created_at DESC`. `user_email`
 }
 ```
 
-### 3.23 `POST /consultant/image` *(JWT)*
+**Implementado (`consultant-message-raitocorp`, id `gPCSDVibMq8ZEsfI`):**
+Decisão de arquitetura — virou **AI Agent** (a montar na UI; ver nota abaixo).
+A casca (auth + log + Save bot msg + respond) está no SDK; o **Railguards**
+(Guardrails classify: jailbreak + nsfw + topical alignment "só iluminação") e o
+**AI Agent** (Gemini Chat + Postgres Chat Memory + Postgres Tool catálogo +
+Output Parser `{reply, product_ids}`) precisam ser arrastados no editor entre
+`Authorized?` e `Save bot msg` — esta instância **descarta nós langchain no
+import via SDK**. O `Save bot msg` já lê `$node["Consultor Raito"].json.output`.
 
-**TODO:** definir estratégia de upload com você:
-- **Opção A:** app faz upload direto pro S3 via presigned URL, manda só a URL pro webhook.
-- **Opção B:** multipart pro próprio n8n (limite ~16MB).
-- **Opção C:** base64 inline no body (limite ~5MB, mais simples).
+### 3.23 `POST /consultant/image` *(JWT)* ✅ implementado (`consultant-image-raitocorp`)
 
-### 3.24 `GET /consultant/sessions/:id` *(JWT)*
+Estratégia de upload definida: **Cloudinary** (Opção A). O app sobe a foto pro
+Cloudinary (`CloudinaryService`) e manda a `secure_url` no `image_path`. O n8n
+baixa a URL, manda a imagem inline pro **Gemini 2.5 Flash** classificar o
+ambiente nos enums do `ProductEntity` (`room`/`light_temperature`/
+`brightness_level`), faz scoring SQL e recomenda **top 3** (nunca vazio). Se a
+foto não der pra classificar, devolve os top-rated + texto pedindo contexto.
+
+**Request:** `{ "session_id": "...", "image_path": "<url Cloudinary>" }`
+**Response:** `MessageEntity` (`type: productRecommendation`).
+
+### 3.24 `GET /consultant/sessions?id=` *(JWT)* ✅ implementado (`consultant-sessions-raitocorp`)
+
+> ⚠️ Era `/consultant/sessions/:id` — path param `:id` não funciona no n8n.
+> Virou **query string** `?id=`.
 
 Histórico de uma sessão (pra retomar conversa). Array de `MessageEntity`.
+
+### 3.25 `POST /consultant/preview` *(JWT)* ✅ implementado (`consultant-preview-raitocorp`)
+
+Preview "produto no meu ambiente": funde a **última foto do ambiente** da sessão
+com a foto do **produto** usando o **Gemini 2.5 Flash Image (nano banana)** e
+sobe o resultado pro Cloudinary. **Limite de 2/dia por usuário** (tabela
+`preview_usage`, reset à meia-noite UTC).
+
+**Request:** `{ "session_id": "...", "product_id": "uuid" }`
+**Response 200:** `MessageEntity` (`type: image`, `image_path` = URL do preview).
+- **429** se o usuário já usou 2 previews hoje (mensagem amigável no body).
+- **422** se a sessão não tem foto de ambiente ("manda uma foto primeiro").
+- **404** se o produto não existe.
+
+O app trata 429/422/404 exibindo a `message` do body como mensagem do bot.
 
 ---
 
