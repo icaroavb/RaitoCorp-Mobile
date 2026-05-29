@@ -74,3 +74,6 @@ Thumbs.db
 # APK/artefatos de build gerados (distribuir fora do git)
 *.apk
 *.aab
+
+# Arquivos temporarios/lock do Office (Word, Excel...)
+~$*

@@ -1,49 +1,97 @@
 # Raitõ Corp — Mobile E-commerce
 
-Aplicativo de e-commerce de iluminação desenvolvido em Flutter. Cobre o ciclo completo de compra: navegação de produtos, carrinho persistente, checkout com seleção de endereço e método de pagamento, acompanhamento de pedidos e gestão de perfil.
+> Loja de iluminação em **Flutter**, com backend **100% em n8n + Postgres** e um
+> **Consultor de Iluminação por IA** (chat, recomendação por foto e preview do
+> produto no seu ambiente). Trabalho de Conclusão de Curso.
+
+```
+┌──────────────┐   HTTPS / JSON    ┌──────────────────────┐   SQL   ┌────────────┐
+│  App Flutter │  X-API-Key + JWT  │  n8n (webhooks)       │ ──────▶ │  Postgres  │
+│  (Android,   │ ───────────────▶  │  regras de negócio    │         │  (dados)   │
+│   iOS, Web)  │                   │  + auth em SQL        │ ◀────── │            │
+└──────────────┘                   └──────────┬───────────┘  result └────────────┘
+                                              │ HTTP
+                              ┌───────────────┼────────────────┐
+                              ▼               ▼                ▼
+                        Cloudinary       ModelScope        Google OAuth
+                       (imagens)       (Consultor IA)      (login social)
+```
+
+O app **nunca** fala direto com o banco: toda leitura e escrita passa por
+webhooks n8n, que concentram autenticação e regras de negócio sobre o Postgres.
 
 ---
 
 ## Índice
 
 1. [Visão geral](#visão-geral)
-2. [Stack e dependências](#stack-e-dependências)
-3. [Arquitetura](#arquitetura)
-4. [Design system](#design-system)
-5. [Funcionalidades](#funcionalidades)
-6. [Integrações externas](#integrações-externas)
-7. [Autenticação](#autenticação)
-8. [Navegação](#navegação)
-9. [Persistência de dados](#persistência-de-dados)
-10. [Dados (API real)](#dados-api-real)
-11. [Banco de dados (Postgres)](#banco-de-dados-postgres)
-12. [Estrutura de pastas](#estrutura-de-pastas)
-13. [Como rodar](#como-rodar)
-14. [Decisões técnicas](#decisões-técnicas)
+2. [Arquitetura em uma olhada](#arquitetura-em-uma-olhada)
+3. [Stack e dependências](#stack-e-dependências)
+4. [Arquitetura do app (Flutter)](#arquitetura-do-app-flutter)
+5. [Backend (n8n + Postgres)](#backend-n8n--postgres)
+6. [Consultor de Iluminação por IA](#consultor-de-iluminação-por-ia)
+7. [Design system](#design-system)
+8. [Funcionalidades](#funcionalidades)
+9. [Autenticação](#autenticação)
+10. [Navegação](#navegação)
+11. [Persistência local](#persistência-local)
+12. [Integrações externas](#integrações-externas)
+13. [Estrutura de pastas](#estrutura-de-pastas)
+14. [Como rodar](#como-rodar)
+15. [Decisões técnicas](#decisões-técnicas)
 
 ---
 
 ## Visão geral
 
-A Raitõ Corp é uma loja especializada em iluminação. O app cobre:
+A Raitõ Corp é uma loja especializada em iluminação. O app cobre o ciclo completo
+de compra e ainda traz um diferencial de IA. Capacidades:
 
-- Catálogo de produtos com filtro por ambiente e busca textual
-- Carrinho persistente (sobrevive a reloads e redirecionamentos de auth)
-- Checkout completo com seleção de endereço, método de pagamento e cálculo de descontos
-- Histórico de pedidos com timeline de status e cancelamento
-- Perfil completo: dados pessoais, endereços, favoritos, avaliações, notificações e pontos de fidelidade
-- Login com email/senha e Google Sign-In (web + Android + iOS)
-- Painel administrativo: gestão de pedidos (avançar status) e CRUD de produtos com upload de imagem
-- Avaliação de produtos entregues com foto e notificações locais de status do pedido
-- Auto-preenchimento de endereço via CEP
+- **Catálogo** com busca textual e filtro por ambiente
+- **Carrinho persistente** (sobrevive a reloads e ao fluxo de login)
+- **Checkout** com seleção de endereço, método de pagamento e descontos — gera um
+  **pedido real** no backend
+- **Pedidos** com timeline de status, cancelamento e **notificação local** quando
+  o pedido sai para entrega / é entregue
+- **Perfil completo:** dados, endereços, favoritos, avaliações (com foto),
+  notificações e pontos de fidelidade
+- **Login** email/senha e Google Sign-In
+- **Painel administrativo:** avançar status de pedidos e CRUD de produtos com
+  upload de imagem
+- **Consultor IA:** chat, recomendação a partir de uma foto do ambiente e preview
+  "como o produto fica no seu cômodo"
+- **Auto-preenchimento de endereço por CEP**
 
-> **Backend real via n8n + Postgres.** O app consome uma API HTTP servida por
-> workflows n8n (`https://n8n.raitocorp.com.br/webhook/...`), que são a camada de
-> regras de negócio sobre o Postgres — o app nunca acessa o banco direto. Os
-> dados mock antigos foram substituídos por essa integração. Contrato completo
-> em [`docs/N8N_API.md`](docs/N8N_API.md); estado do projeto em
-> [`docs/HANDOFF.md`](docs/HANDOFF.md). Único módulo ainda pendente: o
-> **Consultor IA** (`/consultant/*`).
+> Status: **completo e em produção.** Os 33 workflows n8n estão ativos. Contrato
+> da API em [`docs/N8N_API.md`](docs/N8N_API.md); estado do projeto em
+> [`docs/HANDOFF.md`](docs/HANDOFF.md); documento de arquitetura para
+> apresentação em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
+
+### Usuários de teste
+
+| Perfil | Login | Senha |
+|---|---|---|
+| Cliente | `teste@raito.com` | `teste1234` |
+| Admin (vê o Painel Admin) | `admin@raito.com` | `admin1234` |
+
+> Também dá pra criar conta nova pelo próprio app.
+
+---
+
+## Arquitetura em uma olhada
+
+Três camadas independentes, conversando por HTTP:
+
+| Camada | Tecnologia | Responsabilidade |
+|---|---|---|
+| **Cliente** | Flutter (Dart) | UI, estado, navegação, cache local |
+| **Backend / regras** | n8n (low-code) | API gateway, autenticação, regras de negócio, orquestração de IA |
+| **Dados** | PostgreSQL | Persistência (usuários, catálogo, pedidos, chat...) |
+| **Serviços externos** | Cloudinary · ModelScope · Google OAuth | Imagens, IA do consultor, login social |
+
+**Princípio central:** o app é "burro" de propósito — não conhece SQL nem
+segredos de servidor. Ele só sabe falar com endpoints HTTP. Isso mantém a regra de
+negócio num lugar só (n8n) e permite trocar/evoluir o backend sem republicar o app.
 
 ---
 
@@ -53,563 +101,337 @@ A Raitõ Corp é uma loja especializada em iluminação. O app cobre:
 
 | Pacote | Versão | Função | Por quê |
 |---|---|---|---|
-| `flutter_riverpod` | ^2.6.1 | State management | API declarativa, sem boilerplate de `ChangeNotifier`, suporte a `StateNotifier` com sealed class, sem `BuildContext` nos providers |
-| `go_router` | ^14.6.2 | Navegação declarativa | Suporte nativo a `ShellRoute` (bottom nav persistente), deep links, query params para redirect de auth |
-| `google_fonts` | ^6.2.1 | Tipografia | DM Serif Display + DM Sans via CDN — sem necessidade de empacotar fontes no bundle |
-| `phosphor_flutter` | ^2.1.0 | Ícones | Biblioteca coerente com estilo editorial, versões `fill`/`regular`/`bold` do mesmo ícone |
-| `cached_network_image` | ^3.4.1 | Imagens de rede | Cache em disco automático, placeholder e error builder sem configuração extra |
-| `hive_flutter` | ^1.1.0 | Persistência local | NoSQL key-value extremamente rápido, sem dependência de FFI, compatível com web |
-| `shared_preferences` | ^2.3.3 | Sessão de auth | Armazenamento simples de string (email do usuário logado) |
-| `flutter_animate` | ^4.5.0 | Animações | DSL fluente para animar widgets sem `AnimationController` manual |
-| `shimmer` | ^3.0.0 | Loading skeleton | Efeito de carregamento padrão de mercado com uma linha de código |
-| `intl` | ^0.19.0 | Formatação | Locale `pt_BR` para moeda e datas |
-| `image_picker` | ^1.1.2 | Galeria/câmera | Foto de avaliação e de produto (admin) — câmera ou galeria |
-| `equatable` | ^2.0.7 | Igualdade de entidades | Evita `==` manual em entidades de domínio |
-| `google_sign_in` | ^6.2.1 | Login social | OAuth2 via Google, compatível com Android, iOS e Web |
-| `http` | ^1.2.2 | Requisições HTTP | API n8n, Cloudinary, ViaCEP/BrasilAPI |
-| `flutter_secure_storage` | ^9.2.2 | Token JWT | Guarda o JWT da sessão de forma segura (Keystore/Keychain) |
-| `flutter_local_notifications` | ^21.0.0 | Push local | Notifica no celular quando o pedido sai pra entrega / é entregue |
+| `flutter_riverpod` | ^2.6.1 | State management | Declarativo, sem boilerplate de `ChangeNotifier`, `StateNotifier` + sealed class, sem `BuildContext` na lógica |
+| `go_router` | ^14.6.2 | Navegação | `ShellRoute` (bottom nav persistente), deep links, query params para redirect de auth |
+| `google_fonts` | ^6.2.1 | Tipografia | DM Serif Display + DM Sans via CDN |
+| `phosphor_flutter` | ^2.1.0 | Ícones | Estilo editorial coerente, variações fill/regular/bold |
+| `cached_network_image` | ^3.4.1 | Imagens de rede | Cache em disco, placeholder e error builder |
+| `hive_flutter` | ^1.1.0 | Persistência local | NoSQL chave-valor rápido, sem FFI, roda na web |
+| `shared_preferences` | ^2.3.3 | Preferências | Armazenamento simples de string |
+| `flutter_secure_storage` | ^9.2.2 | Sessão (JWT) | Guarda o token no Keystore/Keychain |
+| `flutter_local_notifications` | ^21.0.0 | Push local | Avisa no celular quando o pedido muda de status |
+| `flutter_animate` | ^4.5.0 | Animações | DSL fluente, sem `AnimationController` manual |
+| `shimmer` | ^3.0.0 | Loading skeleton | Efeito de carregamento padrão de mercado |
+| `intl` | ^0.19.0 | Formatação | Locale `pt_BR` (moeda e datas) |
+| `image_picker` | ^1.1.2 | Galeria/câmera | Foto de avaliação, de produto (admin) e do ambiente (consultor) |
+| `gal` | ^2.3.2 | Salvar na galeria | Salvar o preview gerado pela IA |
+| `google_sign_in` | ^6.2.1 | Login social | OAuth2 Google (Android, iOS, Web) |
+| `http` | ^1.2.2 | Requisições HTTP | n8n, Cloudinary, ViaCEP/BrasilAPI |
+| `equatable` | ^2.0.7 | Igualdade de entidades | Evita `==` manual no domínio |
 
 ### Backend e serviços externos
 
 | Serviço | Uso |
 |---|---|
-| **n8n** (`n8n.raitocorp.com.br`) | API gateway + regras de negócio sobre o Postgres. Auth (bcrypt + JWT HS256) feita em SQL via `pgcrypto`. Ver `docs/N8N_API.md`. |
-| **Postgres** | Banco (users, products, orders, reviews, etc.). Acessado só pelo n8n. |
-| **Cloudinary** | Upload de imagens (produtos e fotos de avaliação) via unsigned preset. |
-| Google Cloud OAuth 2.0 | Client ID para Google Sign-In |
-| People API | Fallback de nome/email no login Google web |
+| **n8n** (`n8n.raitocorp.com.br`) | API gateway + regras de negócio. Auth (bcrypt + JWT HS256) feita **em SQL** via `pgcrypto`. |
+| **PostgreSQL** | Banco (users, products, orders, reviews, chat...). Acessado só pelo n8n. |
+| **Cloudinary** | Upload de imagens (produtos, avaliações, fotos do ambiente, previews). |
+| **ModelScope** (Alibaba) | Modelos do Consultor IA: Qwen2.5-72B (chat), Qwen2.5-VL-72B (visão), Qwen-Image-Edit (preview). |
+| **Google Cloud OAuth 2.0** | Login social + People API (fallback de nome/email no web). |
 
 ---
 
-## Arquitetura
+## Arquitetura do app (Flutter)
 
-### Feature-First + Clean Architecture simplificada
+### Feature-first + Clean Architecture simplificada
 
-O projeto segue uma arquitetura **feature-first** onde cada feature encapsula suas camadas internamente:
+Cada feature encapsula suas próprias camadas:
 
 ```
 lib/features/<feature>/
   data/
-    *_repository.dart  ← acesso à API n8n via ApiClient
+    *_repository.dart   ← acesso à API n8n via ApiClient
   domain/
-    entities/        ← modelos de dados puros (sem Flutter), com fromJson/toJson
+    entities/           ← modelos puros (sem Flutter), com fromJson/toJson
   presentation/
-    providers/       ← estado Riverpod (StateNotifier / Provider)
-    screens/         ← páginas completas
-    widgets/         ← widgets reutilizáveis da feature
+    providers/          ← estado Riverpod (StateNotifier / Provider)
+    screens/            ← páginas completas
+    widgets/            ← widgets reutilizáveis da feature
 ```
 
-**Por que feature-first e não layer-first?**
+**Por que feature-first e não layer-first?** Organizar por camada
+(`models/`, `screens/`, `providers/`) espalha uma única feature por várias pastas.
+Com feature-first, tudo de `orders` fica junto — facilita deleção, refatoração e
+onboarding.
 
-Em projetos de médio porte, organizar por camada (`models/`, `screens/`, `providers/`) cria acoplamento invisível entre features: uma mudança na entidade `Order` exige navegar por 4 pastas diferentes. Com feature-first, tudo que pertence a `orders` fica junto — facilita deleção, refatoração e onboarding.
-
-**Camada `data` (repositórios)**
-
-Cada feature tem repositórios que encapsulam as chamadas à API (via o
-`ApiClient` central, que injeta `X-API-Key` + `Bearer` JWT e traduz status code
-em exceções tipadas). Os providers consomem os repositórios — a UI não conhece
-detalhes de HTTP. Entidades em `domain/entities` permanecem puras (sem Flutter),
-com `fromJson`/`toJson` que casam com o contrato do n8n.
-
-### Camadas presentes
+### Fluxo de dados (de cima a baixo)
 
 ```
-┌─────────────────────────────────────────────┐
-│  Presentation (Screens + Widgets)            │
-│  Riverpod Providers (StateNotifier)          │
-├─────────────────────────────────────────────┤
-│  Data (Repositories → ApiClient)             │
-├─────────────────────────────────────────────┤
-│  Domain (Entities — Dart puro)               │
-├─────────────────────────────────────────────┤
-│  Infrastructure (Services)                   │
-│  n8n API · Cloudinary · Hive · SecureStorage │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Screens + Widgets        (UI declarativa)               │
+│        ▲ watch / read                                    │
+│  Riverpod Providers       (StateNotifier, estados)       │
+│        ▲                                                 │
+│  Repositories             (regra de chamada à API)       │
+│        ▲                                                 │
+│  ApiClient                (injeta X-API-Key + Bearer JWT,│
+│                            traduz status code → exceção) │
+│        ▲ HTTP                                            │
+│  Entities (domain)        (Dart puro, fromJson/toJson)   │
+└─────────────────────────────────────────────────────────┘
 ```
+
+O `ApiClient` central (`lib/core/api/`) é o único ponto que monta requisições:
+injeta a `X-API-Key` e o `Bearer <JWT>`, e converte respostas de erro em exceções
+tipadas (`ValidationException`, `AuthException`...). A UI nunca vê HTTP cru.
+
+---
+
+## Backend (n8n + Postgres)
+
+O n8n hospeda **33 workflows**, um por endpoint. Todos seguem a mesma topologia —
+entender um é entender todos:
+
+```
+Webhook (POST /rota)
+   │
+   ▼
+IF "Check X-API-Key" ──── inválida ────▶ Respond 401
+   │ válida
+   ▼
+Postgres (executeQuery)   ← valida o JWT em SQL e roda a regra numa CTE única,
+   │                        devolvendo { statusCode, body }
+   ▼
+IF "statusCode == 200" ── não ────────▶ Respond Err (422 / 404 / 401)
+   │ sim
+   ▼
+Respond 200 (body)
+```
+
+**A autenticação roda dentro do SQL.** A instância n8n é *hardened* e bloqueia
+`require('crypto')` e `$env` em nós Code. Então a verificação de senha (bcrypt) e
+a validação do JWT HS256 (recalcular o HMAC-SHA256, decodificar o payload
+base64url, checar `exp`) são feitas **inteiramente em PostgreSQL** via a extensão
+`pgcrypto`. Não há nó Code para auth.
+
+> O contrato completo dos 33 endpoints, com os IDs reais dos workflows, está em
+> [`docs/N8N_API.md`](docs/N8N_API.md). A explicação detalhada da arquitetura
+> (para a apresentação) está em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
+
+### Tabelas principais (Postgres)
+
+`users` · `addresses` · `products` · `reviews` · `orders` · `order_items` ·
+`order_timeline` · `user_favorites` · `notifications` · `chat_sessions` ·
+`chat_messages` · `preview_usage`. Extensions: `pgcrypto`, `citext`.
+
+---
+
+## Consultor de Iluminação por IA
+
+Diferencial do projeto. É um assistente que só fala de iluminação, com três
+modos — todos servidos pela **ModelScope** (um único token, sem cota apertada de
+provedor):
+
+| Modo | Endpoint | Modelo | O que faz |
+|---|---|---|---|
+| **Chat** | `POST /consultant/message` | `Qwen2.5-72B-Instruct` | Conversa por texto; recomenda produtos do catálogo usando `lumens`, `color_temperature_k`, `ideal_rooms`. Guardrail por prompt de sistema. |
+| **Foto** | `POST /consultant/image` | `Qwen2.5-VL-72B-Instruct` | Recebe uma foto do ambiente (+ texto opcional), classifica o cômodo/temperatura/intensidade e recomenda os **top 3** produtos. |
+| **Preview** | `POST /consultant/preview` | `Qwen-Image-Edit-2509` | Gera uma imagem do **produto instalado no seu cômodo**, com a luz dele. Limite de 2/dia por usuário. |
+
+### Preview assíncrono com polling
+
+A geração de imagem leva 2-4 minutos, mas o Cloudflare na frente do n8n corta
+conexões síncronas em ~100s (erro 524). A solução é um fluxo assíncrono no mesmo
+endpoint, decidido por um `IF "Tem task_id?"`:
+
+```
+1ª chamada (sem task_id):  valida auth+limite+fontes → submete ao ModelScope
+                           → responde { status: processing, task_id } em ~3s
+        │
+        ▼ (app reenvia o task_id a cada 30s, até 5 min)
+Polling (com task_id):     consulta o status no ModelScope
+                           ├─ SUCCEED → sobe pro Cloudinary, salva, responde ready
+                           ├─ FAILED  → re-submete e devolve novo task_id
+                           └─ senão   → processing
+```
+
+O `session_id` é persistido no app (Hive), então um preview que terminou com o app
+fechado aparece ao reabrir o consultor (o servidor sempre salva o resultado no
+banco, independente do polling em memória).
+
+> Aprendizado registrado: nós langchain **somem** no import via SDK desta
+> instância, e o free tier do Gemini é de apenas 20 req/dia. Por isso a IA inteira
+> roda via **HTTP Request → ModelScope**, não via nós de IA nativos.
 
 ---
 
 ## Design system
 
-Todos os tokens de design são centralizados em `lib/core/theme/`:
+Tokens centralizados em `lib/core/theme/`.
 
 ### Cores — `AppColors`
 
 | Token | Hex | Uso |
 |---|---|---|
-| `obsidian` | `#111111` | Texto primário, botões principais, fundo de cards escuros |
-| `cream` | `#F9F5EF` | Background geral — evoca papel kraft, referência editorial |
+| `obsidian` | `#111111` | Texto primário, botões, cards escuros |
+| `cream` | `#F9F5EF` | Background geral (referência editorial, papel kraft) |
 | `warmWhite` | `#FFFFFF` | Fundo de cards e sheets |
-| `amber400` | `#F5A623` | Acento principal — evoca luz quente incandescente |
+| `amber400` | `#F5A623` | Acento principal — a luz quente da marca |
 | `amber600` | `#C47D0E` | Texto amber sobre fundo claro (contraste WCAG AA) |
-| `success` | `#2D7A4F` | Confirmações, frete grátis, check de CEP |
-| `error` | `#DC2626` | Erros de login, cancelamento de pedido |
-| `warmLight` | `#F5A623` | Barra de temperatura quente nos produtos |
-| `coolLight` | `#A8C8E8` | Barra de temperatura fria nos produtos |
+| `success` | `#2D7A4F` | Confirmações, frete grátis, CEP encontrado |
+| `error` | `#DC2626` | Erros e cancelamentos |
+| `warmLight` / `coolLight` | `#F5A623` / `#A8C8E8` | Barra de temperatura de cor dos produtos |
 
-**Por que âmbar como acento?** A Raitõ Corp vende iluminação. Âmbar é a cor da luz quente — o acento reforça o posicionamento de marca em cada elemento da UI.
+**Por que âmbar?** A Raitõ vende iluminação. Âmbar é a cor da luz quente — o acento
+reforça a marca em cada tela.
 
 ### Tipografia — `AppTypography`
 
-- **Títulos e display:** DM Serif Display — fonte serifada com personalidade editorial, usada em logos e headings
-- **Corpo e UI:** DM Sans — sans-serif geométrica, excelente legibilidade em tamanhos pequenos
+- **Títulos / display:** DM Serif Display (serifada, editorial)
+- **Corpo / UI:** DM Sans (sans-serif geométrica, legível em tamanhos pequenos)
 
-Ambas as fontes são da mesma família de design (DM), garantindo harmonia visual sem conflito tipográfico.
+Mesma família de design (DM) → harmonia sem conflito tipográfico.
 
-### Espaçamento — `AppSpacing`
-
-Sistema baseado em múltiplos de 4px:
+### Espaçamento e bordas
 
 ```
-xs=4  sm=8  md=12  lg=16  xl=20  xxl=24  xxxl=32  huge=48  page=20
+AppSpacing  xs=4  sm=8  md=12  lg=16  xl=20  xxl=24  xxxl=32  huge=48  page=20
+AppRadius   sm=8  md=12  lg=16  xl=20  full=999
 ```
 
-`page` é o padding horizontal padrão de todas as telas — garantia de margens consistentes.
-
-### Bordas — `AppRadius`
-
-```
-sm=8  md=12  lg=16  xl=20  full=999
-```
+`page` (20) é o padding horizontal padrão de todas as telas.
 
 ---
 
 ## Funcionalidades
 
-### Home
+<details>
+<summary><strong>Home · Catálogo · Detalhe do produto</strong></summary>
 
-- Banner hero com CTA de destaque
-- Seção "Mais vendidos" com cards horizontais roláveis
-- Seção de categorias por ambiente (Quarto, Sala, Escritório...)
-- Banner do Consultor IA com gradiente navy/âmbar
-- Avatar de perfil no AppBar: exibe iniciais quando logado, ícone quando não logado
+- **Home:** banner hero, "Mais vendidos", categorias por ambiente, banner do
+  Consultor IA, avatar com iniciais no AppBar.
+- **Catálogo:** lista de `ProductCard`, busca textual em tempo real, filtro por
+  ambiente (chips), contagem de resultados. Cada card: imagem cacheada, preço (com
+  tachado em desconto), barra de temperatura de cor, tags, badge "Mais vendido",
+  favoritar (requer login) e adicionar ao carrinho.
+- **Detalhe:** galeria, especificações técnicas (W, lúmens, K, dimensões, peso),
+  certificações, garantia, economia de energia, avaliações (com foto) e ambientes
+  ideais.
+</details>
 
-### Catálogo de produtos
+<details>
+<summary><strong>Carrinho · Checkout · Sucesso</strong></summary>
 
-- Lista completa de produtos com `ProductCard`
-- **Busca textual** em tempo real por nome, descrição e tags
-- **Filtro por ambiente** (chips horizontais): Quarto, Sala, Cozinha, Escritório, Externo, Comercial
-- Contagem de resultados em tempo real
-- Cada card exibe:
-  - Imagem com cache em disco
-  - Nome, preço atual e preço original (com tachado quando há desconto)
-  - Barra de temperatura de cor (quente → neutro → frio)
-  - Tags de característica (Bivolt, Fácil instalação, LED, etc.)
-  - Badge "Mais vendido"
-  - Botão de favorito (requer login — exibe SnackBar quando não logado)
-  - Botão de adicionar ao carrinho
+- **Carrinho:** itens com controle de quantidade, remover individual e limpar
+  tudo, resumo (subtotal, frete, total). **Persistido em Hive** — sobrevive a hot
+  restart, login e fechamento do app. **Auth guard:** finalizar sem login abre
+  bottom sheet de login/cadastro preservando o carrinho.
+- **Checkout:** seleção de endereço (com picker), método de pagamento — **Pix**
+  (5% de desconto), **cartão** (até 10x), **boleto** — e resumo financeiro. Ao
+  confirmar, cria um **pedido real** via `POST /me/orders`.
+- **Sucesso:** animação de check, data estimada de entrega, atalhos para acompanhar
+  o pedido ou voltar ao início.
+</details>
 
-### Detalhe do produto
+<details>
+<summary><strong>Perfil · Pedidos · Endereços · Favoritos · Avaliações · Notificações</strong></summary>
 
-- Galeria de imagens (múltiplos ângulos)
-- Especificações técnicas: potência (W), lúmens, temperatura de cor (K), dimensões, peso
-- Certificações e garantia
-- Porcentagem de economia de energia
-- Seção de avaliações com nota média e lista de reviews
-- Indicação de ambientes ideais
-- CTA de adicionar ao carrinho com SnackBar de confirmação
+- **Perfil (hub):** card de identidade (avatar de iniciais, badge Admin quando
+  aplicável), card de pedido ativo com anel pulsante, menu com contadores, barra de
+  pontos de fidelidade, sino com badge de não lidas.
+- **Pedidos:** lista com filtros por status, timeline vertical no detalhe,
+  cancelamento e "avaliar pedido" (entregues). **Notificação local** dispara quando
+  o status vira *shipped* / *delivered*.
+- **Endereços:** lista com default destacado, definir padrão / excluir,
+  auto-preenchimento por CEP.
+- **Favoritos / Avaliações / Notificações:** grid de favoritos; abas
+  "para avaliar / avaliados"; notificações agrupadas por período, swipe para
+  deletar, "marcar todas como lidas".
+</details>
 
-### Carrinho
+<details>
+<summary><strong>Painel Admin</strong> (só para <code>is_admin</code>)</summary>
 
-- Listagem de itens com imagem, nome, subtítulo, preço e quantidade
-- Controle de quantidade (+ / −) com atualização em tempo real
-- Botão "Remover" individual e "Limpar tudo" no AppBar
-- Resumo do pedido: subtotal, frete (grátis), total
-- **Persistência via Hive** — o carrinho sobrevive a:
-  - Hot restart
-  - Redirecionamento para tela de login
-  - Fechamento e reabertura do app
-- **Auth guard:** ao clicar em "Finalizar compra" sem login, exibe bottom sheet com:
-  - Botão "Fazer login" → `/login?redirect=/checkout`
-  - Botão "Criar conta" → `/register?redirect=/checkout`
-  - O carrinho continua intacto durante todo o fluxo de auth
-
-### Checkout
-
-- **Seção de itens:** lista resumida do carrinho
-- **Seleção de endereço:**
-  - Exibe endereço padrão automaticamente
-  - Botão "Trocar" (quando há mais de 1 endereço) abre picker em bottom sheet
-  - Se não há endereço: botão para adicionar novo via `AddressFormSheet`
-- **Método de pagamento:**
-  - **Pix** — desconto automático de 5% sobre o subtotal + aprovação imediata
-  - **Cartão de crédito** — até 10x sem juros
-  - **Boleto** — vence em 2 dias úteis
-- **Resumo financeiro:** subtotal, frete, desconto (se Pix), total
-- Botão "Confirmar pedido · R$ X" desabilitado quando não há endereço selecionado
-- Loading modal durante processamento (800ms simulado) com `rootNavigator: true`
-- Ao confirmar: cria `OrderEntity`, adiciona ao histórico, limpa carrinho, navega para tela de sucesso
-
-### Tela de sucesso do checkout
-
-- Animação de check com `flutter_animate` (escala com `elasticOut`)
-- Card com data estimada de entrega (+2 dias)
-- Botão "Acompanhar pedido" → `/profile/orders`
-- Botão "Voltar ao início" → `/home`
-
-### Perfil — Hub
-
-**Usuário não logado:**
-- Ilustração e CTA de login/cadastro
-- Link "Continuar sem conta"
-
-**Usuário logado:**
-- `_IdentityCard`: card obsidian com avatar de iniciais em âmbar, nome, email, badge "Admin" (quando aplicável), data de membro
-- `_ActiveOrderCard`: card com pulsing ring animado (via `flutter_animate`) quando há pedido em andamento — link direto para o detalhe
-- Menu de navegação com contadores (ex: "Endereços (2)")
-- `_LoyaltyCard`: barra de progresso de pontos de fidelidade com tier atual
-- Sino no AppBar com badge de notificações não lidas
-- Botão de logout que abre `LogoutConfirmationSheet`
-
-### Meus pedidos
-
-- Lista de pedidos do usuário autenticado
-- **Filtros por status:** Todos · Em andamento · Entregues · Cancelados
-- Cada card: número do pedido, thumbnail do primeiro item, status badge colorido, data, valor total
-- Status com cores semânticas: âmbar (em andamento), verde (entregue), vermelho (cancelado)
-
-### Detalhe do pedido
-
-- Card de status com ícone e cor contextual
-- **Timeline vertical:** eventos com estados visuais distintos
-  - Verde + check: etapa concluída
-  - Âmbar: etapa ativa
-  - Cinza: etapa futura
-- Seção de itens, endereço de entrega e informações de pagamento
-- Botão "Cancelar pedido" (pedidos canceláveis) → AlertDialog de confirmação com `rootNavigator: true`
-- Botão "Avaliar este pedido" (pedidos entregues não avaliados)
-
-### Meus dados
-
-- Visualização de nome, email, telefone e data de nascimento
-- Modo de edição inline (toggle por botão no AppBar)
-- Salva via `authProvider.notifier.updateProfile()`
-- Aviso de conformidade LGPD
-
-### Endereços
-
-- Lista com destaque visual no endereço padrão (borda âmbar + badge "PADRÃO")
-- `PopupMenuButton` em cada card: "Definir como padrão" / "Excluir"
-- FAB (+) abre `AddressFormSheet` com auto-preenchimento via CEP
-
-### Favoritos
-
-- Grid 2 colunas com produtos salvos
-- Botão de remover favorito overlay no card
-- Estado vazio com CTA para navegar ao catálogo
-
-### Avaliações
-
-- `TabController` com duas abas: "Para avaliar (N)" / "Já avaliados (N)"
-- Sheet de avaliação: picker de estrelas (1–5) + campo de texto
-
-### Notificações
-
-- Lista agrupada por período: Hoje · Ontem · Esta semana · Mais antigas
-- Swipe para deletar (`Dismissible`)
-- "Marcar todas como lidas" no AppBar
-- Ícone colorido por tipo (pedido, promoção, sistema, avaliação)
-- Badge de não lidas no sino do perfil
-
----
-
-## Integrações externas
-
-### CEP — Auto-preenchimento de endereço
-
-**Arquivo:** `lib/core/services/cep_service.dart`
-
-```
-Usuário digita 8 dígitos
-        ↓
-[1ª tentativa] ViaCEP
-  GET https://viacep.com.br/ws/{cep}/json/
-        ↓ (falha ou erro)
-[Fallback] BrasilAPI
-  GET https://brasilapi.com.br/api/cep/v2/{cep}
-        ↓
-Preenche: logradouro, bairro, cidade, UF
-Foca automaticamente no campo "Número"
-```
-
-**Por que dois providers?** Nenhuma API pública tem 100% de uptime. ViaCEP e BrasilAPI têm infraestruturas independentes. Timeout de 6s por tentativa evita travamento da UI.
-
-**UX implementada:**
-- Máscara automática `XXXXX-XXX` enquanto digita
-- Spinner inline durante a busca
-- Ícone ✓ verde quando encontrado, ⚠ vermelho quando não encontrado
-- Dropdown de UF com todos os 27 estados (substitui campo de texto livre)
-- Foco automático no campo "Número" após preenchimento
+- Avançar status de pedidos (confirmed → preparing → shipped → delivered).
+- CRUD de produtos com upload de imagem (Cloudinary). A validação de `is_admin`
+  acontece **no SQL** de cada workflow admin — não dá pra burlar pelo app.
+</details>
 
 ---
 
 ## Autenticação
 
-### Arquitetura de auth
-
 ```dart
 sealed class AuthState {
-  AuthLoading          // estado inicial — carregando SharedPreferences
+  AuthLoading                       // carregando token do storage
   Unauthenticated(errorMessage?)
   Authenticated(user)
 }
 ```
 
-**Por que sealed class?** Força o `when`/`switch` a cobrir todos os estados em tempo de compilação. Impossível esquecer de tratar o estado de loading ou erro.
+**Por que sealed class?** O `switch` é exaustivo em tempo de compilação —
+impossível esquecer de tratar o loading ou o erro.
 
-### Login com email/senha
+- **Email/senha:** `POST /auth/login` valida a senha (bcrypt via `pgcrypto`) e
+  devolve um JWT HS256 (TTL 7 dias). O token vai pro `flutter_secure_storage`; a
+  sessão é reidratada via `GET /me` na inicialização.
+- **Google Sign-In:** `POST /auth/google` troca o `id_token` do Google por um JWT
+  Raitõ. No web, como o `google_sign_in_web` não popula `email`/`name`, o app busca
+  esses dados na **People API** com o `access_token`.
+- **Auth guard no checkout:** finalizar sem login abre o sheet de login; o redirect
+  é preservado (`/login?redirect=/checkout`) e o carrinho nunca é perdido.
 
-- Validação no backend (`POST /auth/login` no n8n): senha conferida com bcrypt
-  via `pgcrypto`, devolve um JWT HS256 (TTL 7 dias)
-- O JWT é guardado em `flutter_secure_storage`; a sessão é reidratada via
-  `GET /me` na inicialização
-- Mensagem de erro inline no formulário
-- `AuthLoading` exibe `CircularProgressIndicator` no botão
-
-### Google Sign-In
-
-**Configuração:**
-- `android/app/google-services.json` com projeto Firebase real (`raitocorp-e46a7`)
-- Plugin `com.google.gms.google-services:4.4.4` no Gradle
-- `clientId` configurado via meta tag no `web/index.html`
-- URL scheme configurado no `ios/Runner/Info.plist`
-
-**Fluxo Web — tratamento especial:**
-
-O plugin `google_sign_in_web` usa fluxo token OAuth2. Neste fluxo, o `GoogleSignInAccount` pode retornar `email` vazio porque o SDK web não popula esses campos automaticamente.
-
-```dart
-if (kIsWeb && email.isEmpty) {
-  final auth = await account.authentication;
-  final res = await http.get(
-    'https://people.googleapis.com/v1/people/me'
-    '?personFields=names,emailAddresses',
-    headers: {'Authorization': 'Bearer ${auth.accessToken}'},
-  );
-  // extrai email e displayName do JSON da People API
-}
-```
-
-**Por que não usar Firebase Auth SDK completo?** O projeto não tem backend real. Adicionar `firebase_core` + `firebase_auth` aumentaria o bundle em ~2MB para benefício zero neste contexto.
-
-### Auth guard no checkout
-
-```dart
-void _proceedToCheckout(BuildContext context, WidgetRef ref) {
-  if (!ref.read(isLoggedInProvider)) {
-    _showLoginRequiredSheet(context);
-    return;
-  }
-  context.push('/checkout');
-}
-```
-
-O redirect é preservado via query param: `/login?redirect=/checkout`
-
-O carrinho **nunca** é limpo durante o fluxo de auth — persistido em Hive.
-
-### Usuários de teste
-
-| Email | Senha | Perfil |
-|---|---|---|
-| `camila@email.com` | `123456` | Completo — 2 pedidos, 2 endereços, favoritos, 890 pts |
-| `maria@email.com` | `123456` | Básico — 1 pedido entregue, 1 endereço, 320 pts |
-| `joao@email.com` | `123456` | Novo — sem pedidos, sem endereço, 0 pts |
-| `admin@raito.com` | `admin` | Admin — badge especial, 9999 pts |
+> **Por que não Firebase Auth?** A identidade é própria (n8n + JWT).
+> `firebase_core` + `firebase_auth` somariam ~2 MB ao bundle e duplicariam uma
+> camada que já existe no backend. O `google_sign_in` isolado cobre o OAuth2.
 
 ---
 
 ## Navegação
 
-### GoRouter com ShellRoute
+GoRouter com `ShellRoute` para bottom nav persistente:
 
 ```
 GoRouter
 ├── ShellRoute (MainShell — bottom nav persistente)
 │   ├── /home
-│   ├── /products
-│   │   └── :id
+│   ├── /products  └── :id
 │   ├── /consultant
 │   ├── /cart
-│   ├── /profile
-│   ├── /profile/orders
-│   │   └── :id
-│   ├── /profile/favorites
-│   ├── /profile/reviews
-│   ├── /profile/addresses
-│   ├── /profile/my-data
-│   ├── /profile/notifications
-│   ├── /checkout
-│   └── /checkout/success/:orderId
-├── /login    (sem bottom nav — flow isolado)
-└── /register (sem bottom nav — flow isolado)
+│   ├── /profile   ├── /orders └── :id
+│   │              ├── /favorites · /reviews · /addresses
+│   │              ├── /my-data  · /notifications
+│   ├── /checkout  └── /success/:orderId
+├── /login     (fora do shell — modo dedicado)
+└── /register  (fora do shell)
 ```
 
-**Por que todas as rotas de perfil e checkout dentro do ShellRoute?**
-
-Na versão inicial essas rotas estavam fora do shell. Resultado: a bottom nav desaparecia ao navegar para pedidos ou checkout. Decisão: tudo com bottom nav fica dentro do shell; só login e registro ficam fora (intencionalmente — sem nav dá sensação de "modo dedicado" de auth).
-
-### Transições de página
-
-```dart
-_fadePage(220ms)   // tabs principais — fade indica troca lateral de contexto
-_slidePage(280ms)  // sub-páginas — slide indica aprofundamento hierárquico
-```
-
-### Navigator e rootNavigator
-
-O `ShellRoute` introduz um navigator interno. `showDialog` e `showModalBottomSheet` empilham no navigator raiz. Se `Navigator.pop` não usa `rootNavigator: true`, tenta fechar a página do shell em vez do dialog.
-
-Solução aplicada em todos os dialogs e loading modals:
-```dart
-Navigator.of(context, rootNavigator: true).pop()
-```
+- **Tudo com bottom nav fica dentro do shell**; só login/registro ficam fora
+  (intencional — passa a sensação de "modo de autenticação").
+- **Transições:** fade (220ms) entre tabs, slide (280ms) ao aprofundar.
+- **`rootNavigator: true`** em todos os dialogs e loading modals — o `ShellRoute`
+  tem um navigator interno, e sem isso o `pop` fecharia a página em vez do dialog.
 
 ---
 
-## Persistência de dados
+## Persistência local
 
-### Hive — Carrinho
-
-Carrinho serializado como JSON em `Box<String>`. Hive foi escolhido sobre SQLite porque:
-- Suporta listas de tamanho variável sem schema relacional
-- Performance superior para escritas frequentes (atualizações de quantidade)
-- Compatível com web sem FFI
-
-### flutter_secure_storage — Sessão de auth
-
-Armazena o **JWT** da sessão de forma segura (Android Keystore / iOS Keychain).
-Na inicialização do `AuthNotifier`, o token é lido e a sessão reidratada via
-`GET /me` no backend (que valida o JWT e devolve o usuário).
-
----
-
-## Dados (API real)
-
-Os dados mock foram removidos. Todo o conteúdo vem da API n8n + Postgres
-através dos repositórios em `lib/features/<feature>/data/*_repository.dart`,
-que chamam o `ApiClient` central (`lib/core/api/`). O catálogo nasce com alguns
-produtos de exemplo semeados no banco, e cresce conforme o admin cadastra novos.
-
-**Usuários de teste:**
-
-| Perfil | Login | Senha |
+| O quê | Onde | Por quê |
 |---|---|---|
-| Cliente | `teste@raito.com` | `teste1234` |
-| Admin (vê o Painel Admin) | `admin@raito.com` | `admin1234` |
-
-> Também é possível criar conta nova pelo próprio app (cadastro).
+| **Carrinho** | Hive (`Box<String>`, JSON) | Lista variável, escritas frequentes, roda na web sem FFI |
+| **Sessão (JWT)** | `flutter_secure_storage` | Keystore/Keychain; reidratada via `GET /me` |
+| **`session_id` do consultor** | Hive (`consultant_box`) | Retoma a mesma conversa entre aberturas |
 
 ---
 
-## Banco de dados (Postgres)
+## Integrações externas
 
-> **Para quem vai integrar novos módulos (ex: o Consultor IA / chatbot):** esta é
-> a arquitetura **real e atual** do banco. O app nunca acessa o Postgres direto —
-> tudo passa por workflows n8n. Extensions habilitadas: `pgcrypto` (UUID, bcrypt,
-> hmac) e `citext` (email case-insensitive).
-
-### Tabelas existentes
+### CEP — auto-preenchimento (`lib/core/services/cep_service.dart`)
 
 ```
-users
-  id              uuid PK        gen_random_uuid()
-  email           citext UNIQUE NOT NULL
-  name            text NOT NULL
-  password_hash   text           -- bcrypt via pgcrypto; NULL p/ conta só-Google
-  google_sub      text UNIQUE    -- 'sub' do id_token Google
-  phone           text
-  birth_date      date
-  is_admin        boolean NOT NULL DEFAULT false
-  loyalty_points  int NOT NULL DEFAULT 0
-  created_at      timestamptz NOT NULL DEFAULT now()
-
-addresses
-  id, user_id(FK users), label, street, number, complement, neighborhood,
-  city, state char(2), zip_code, is_default bool, created_at
-
-products
-  id uuid PK, name, description, price numeric(10,2), original_price,
-  image_urls text[], light_temperature, socket_type, is_bivolt, is_easy_install,
-  energy_saving_percent, lifespan_years, brightness_level, ideal_rooms text[],
-  power_watts, lumens, color_temperature_k, dimensions, weight_kg,
-  certifications text[], warranty_years, rating numeric(3,2), review_count,
-  sold_count, is_best_seller, category, tags text[], active bool, created_at
-  -- NOTA: products.rating é NOT NULL (use coalesce(avg(...),0) ao recalcular)
-
-reviews
-  id, product_id(FK products), user_id(FK users, NULL), author_name, rating int,
-  comment, room, has_photo bool, photo_url text, created_at
-
-orders
-  id text PK          -- short id legível, ex "12847"
-  user_id(FK users), status, address_id(FK addresses, NULL),
-  address_snapshot jsonb,        -- endereço congelado no momento da compra
-  subtotal, shipping, discount, payment_method, estimated_delivery, reviewed bool,
-  created_at
-  -- status: confirmed | preparing | shipped | delivered | cancelled
-
-order_items
-  id, order_id(FK orders), product_id(FK products, NULL), product_name,
-  image_url, subtitle, price, quantity
-
-order_timeline
-  id, order_id(FK orders), title, timestamp, completed bool, active bool,
-  description, position int
-
-user_favorites
-  user_id(FK users), product_id(FK products), created_at   -- PK (user_id, product_id)
-
-notifications
-  id, user_id(FK users), type, title, body, read bool, created_at
-  -- type: order | promotion | system | review
+8 dígitos → ViaCEP  ──(falha)──▶ BrasilAPI  →  logradouro/bairro/cidade/UF
+                                              →  foca no campo "Número"
 ```
 
-### Ainda NÃO criadas — necessárias para o Consultor IA
+**Dois provedores** porque nenhuma API pública tem 100% de uptime, e ViaCEP +
+BrasilAPI têm infra independente. Timeout de 6s por tentativa. UX: máscara
+`XXXXX-XXX`, spinner inline, ✓/⚠ de status, dropdown com os 27 estados.
 
-As tabelas de chat do contrato (`docs/N8N_API.md` §2) ainda não existem no banco.
-Quem for fazer o bot precisa criá-las:
+### Cloudinary — upload de imagens
 
-```sql
-CREATE TABLE chat_sessions (
-  id          TEXT PRIMARY KEY,                      -- gerado pelo app
-  user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE chat_messages (
-  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id               TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-  author                   TEXT NOT NULL,            -- user | bot
-  type                     TEXT NOT NULL,            -- text | image | productRecommendation
-  text                     TEXT,
-  image_path               TEXT,
-  product_recommendations  UUID[] NOT NULL DEFAULT '{}',  -- ids de products
-  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX ON chat_messages (session_id, created_at);
-```
-
-### Convenções ao criar workflows que tocam o banco
-
-Esta instância n8n é *hardened* — pontos que mudam como escrever os workflows:
-
-- **Sem `$env` e sem `require('crypto')`** em nós Code. Auth (verificar senha,
-  gerar/validar JWT HS256) é feita **100% em SQL via `pgcrypto`**. O endpoint do
-  bot é protegido por JWT: reusar a mesma CTE de validação dos workflows `/me/*`
-  (recalcula o HMAC e extrai `sub` = user_id).
-- **Credential Postgres** no n8n: `Postgres account`.
-- **`queryReplacement` é CSV** e descarta valor vazio (→ erro "no parameter $N").
-  Use o sentinela `__NULL__` + `nullif($n,'__NULL__')`.
-- **Webhook com path param `:id` não funciona** sem o webhookId na URL → use
-  POST + id no corpo (ou query string em GET), com path estático.
-- **Numa CTE única, um `INSERT` irmão não é visível ao `SELECT` final** (mesmo
-  snapshot). Para responder dados recém-inseridos, monte a resposta a partir dos
-  dados de entrada, não relendo a tabela.
-
-O contrato HTTP do chat (`POST /consultant/message`, `GET /consultant/sessions/:id`,
-upload de imagem) está em [`docs/N8N_API.md`](docs/N8N_API.md) §3.22–3.24.
+Preset *unsigned* (`raitocorp-mobile`, cloud `dvt0gyhlr`). Usado para fotos de
+produto (admin), de avaliação, do ambiente (consultor) e para o preview gerado
+pela IA. Nada secreto — cloud name e preset são públicos por natureza.
 
 ---
 
@@ -617,7 +439,7 @@ upload de imagem) está em [`docs/N8N_API.md`](docs/N8N_API.md) §3.22–3.24.
 
 ```
 lib/
-├── main.dart                        # Hive + intl + ProviderScope
+├── main.dart                        # Hive + intl + notificações + ProviderScope
 ├── app.dart                         # MaterialApp + tema + router
 │
 ├── core/
@@ -627,25 +449,23 @@ lib/
 │   ├── notifications/               # notificações locais (status do pedido)
 │   ├── router/app_router.dart       # GoRouter — toda a árvore de rotas
 │   ├── services/cep_service.dart    # ViaCEP + BrasilAPI
-│   ├── theme/                       # tokens de design (cores, espaços, raios, tipografia)
+│   ├── theme/                       # tokens de design
 │   └── widgets/                     # widgets compartilhados (shell, nav, product card)
 │
 ├── shared/
-│   └── extensions/number_extensions.dart   # formatCurrency() em pt_BR
+│   └── extensions/                  # formatCurrency() em pt_BR
 │
 └── features/
-    ├── admin/         # hub admin: avançar pedidos + CRUD de produtos
-    ├── auth/          # login, registro, Google Sign-In, AuthState sealed
-    ├── cart/          # carrinho Hive, checkout, tela de sucesso
-    ├── consultant/    # consultor IA (pendente)
-    ├── home/          # home screen
-    ├── products/      # catálogo, detalhe, filtros, busca
-    └── profile/       # hub, pedidos, endereços, favoritos,
-                       # avaliações, notificações, meus dados
+    ├── admin/        # hub admin: avançar pedidos + CRUD de produtos
+    ├── auth/         # login, registro, Google Sign-In, AuthState sealed
+    ├── cart/         # carrinho Hive, checkout, sucesso
+    ├── consultant/   # Consultor IA: chat, foto, preview
+    ├── home/         # home
+    ├── products/     # catálogo, detalhe, filtros, busca
+    └── profile/      # hub, pedidos, endereços, favoritos, avaliações, notificações, meus dados
 ```
 
-> Cada feature tem `data/*_repository.dart` (chama a API) além de
-> `domain/` e `presentation/`.
+Cada feature tem `data/`, `domain/` e `presentation/`.
 
 ---
 
@@ -654,7 +474,7 @@ lib/
 ### Pré-requisitos
 
 - Flutter SDK `^3.11.4`
-- Para web: Chrome ou Edge
+- Android: SDK + Java 21 (para gerar APK). Web: Chrome/Edge.
 
 ### Instalação
 
@@ -666,107 +486,60 @@ flutter pub get
 
 ### Executar
 
-O app já aponta pra **produção por padrão** (base URL, API key e Cloudinary
-estão como `defaultValue` em `lib/core/config/app_config.dart`), então
-`flutter run` puro já funciona — sem precisar de `--dart-define`.
+O app já aponta para **produção por padrão** (base URL, API key e Cloudinary são
+`defaultValue` em `lib/core/config/app_config.dart`), então `flutter run` puro já
+funciona — sem `--dart-define`.
 
 ```bash
-# Web (porta fixa necessária para Google Sign-In)
-flutter run -d chrome --web-port=5000
-
-# Android
-flutter run -d android
-
-# iOS
-flutter run -d ios
+flutter run -d chrome --web-port=5000   # Web (porta fixa p/ Google Sign-In)
+flutter run -d android                  # Android
+flutter run -d ios                      # iOS
 ```
 
-Para apontar pra um n8n local/staging, sobrescreva via `--dart-define`
-(`N8N_BASE_URL`, `N8N_API_KEY`, `N8N_WEBHOOK_PREFIX`) — ver scripts em `scripts/`.
+> **Atenção:** no **Chrome** os webhooks n8n dão erro de **CORS**
+> (`No 'Access-Control-Allow-Origin'`). Para testar o backend de verdade, use
+> **Android/emulador**, onde CORS não se aplica.
+
+Para apontar para um n8n local/staging, sobrescreva via `--dart-define`
+(`N8N_BASE_URL`, `N8N_API_KEY`, `N8N_WEBHOOK_PREFIX`).
 
 ### Gerar o APK (distribuição)
 
 ```bash
 flutter build apk --release
-# saída: build/app/outputs/flutter-apk/app-release.apk
+# saída: build/app/outputs/flutter-apk/app-release.apk (~56 MB)
 ```
 
-O APK é assinado com a debug key (suficiente pra distribuir entre colegas —
-instala em qualquer Android habilitando "instalar de fontes desconhecidas").
-Requer Android SDK instalado. O `Raito-v1.0.0.apk` na raiz é a cópia pronta
-pra enviar.
-
-### Google Sign-In — configuração por plataforma
-
-**Web:**
-- `http://localhost:5000` deve estar nas "Origens JavaScript autorizadas" do cliente OAuth no Google Cloud Console (projeto `raitocorp`)
-- `clientId` já configurado no `web/index.html`
-
-**Android:**
-- `android/app/google-services.json` com o projeto `raitocorp-e46a7` já incluído
-
-**iOS:**
-- Substituir `ios/Runner/GoogleService-Info.plist` pelo arquivo real do Firebase iOS
-- Atualizar o URL scheme no `Info.plist` com o `REVERSED_CLIENT_ID`
+Assinado com debug key — instala em qualquer Android com "fontes desconhecidas"
+habilitado. Nome do app: **RaitoCorp**.
 
 ---
 
 ## Decisões técnicas
 
-### Por que Riverpod e não Bloc ou Provider?
+**Riverpod (e não Bloc/Provider).** Bloc é robusto mas verboso (Event, State, Bloc,
+BlocProvider, BlocBuilder por feature). `StateNotifier` + sealed class dá o mesmo
+resultado com metade do código, e Riverpod não depende de `BuildContext` para
+leitura — lógica de negócio separada da UI.
 
-- **Bloc** é excelente mas verboso: para cada feature seriam necessários `Event`, `State`, `Bloc`, `BlocProvider`, `BlocBuilder`. `StateNotifier` + sealed class dá o mesmo resultado com metade do código.
-- **Provider (package)** não tem tipagem forte para estados de loading/error e tem limitações de escopo. Riverpod resolve nativamente.
-- Riverpod não depende de `BuildContext` para leitura — lógica de negócio completamente separada da UI.
+**GoRouter (e não Navigator 2.0 manual / AutoRoute).** É o router oficial do
+Flutter; `ShellRoute` resolve a bottom nav persistente nativamente; AutoRoute
+geraria código (passo de build + arquivos gerados no repo).
 
-### Por que GoRouter e não Navigator 2.0 manual ou AutoRoute?
+**Hive para o carrinho (e não SQLite).** Estrutura simples (lista de primitivos)
+não justifica schema relacional, e Hive roda na web sem FFI (sqflite não roda na
+web sem workaround).
 
-- GoRouter é o router oficial recomendado pela equipe Flutter.
-- `ShellRoute` para bottom nav persistente seria muito complexo com Navigator 2.0 manual.
-- AutoRoute gera código — adiciona passo de build no CI e arquivos gerados no repositório.
+**Backend em n8n (e não um backend tradicional).** Para um TCC, o n8n concentra
+auth + regras + integrações de IA num lugar visual e versionável, sem precisar
+manter um servidor de aplicação. O custo é conviver com as restrições da instância
+*hardened* (auth em SQL, sem path param dinâmico, sem nós langchain via SDK) —
+documentadas em [`docs/N8N_API.md`](docs/N8N_API.md) e [`docs/HANDOFF.md`](docs/HANDOFF.md).
 
-### Por que Hive para o carrinho e não SQLite?
+**Consultor IA via ModelScope (e não Gemini/langchain).** Os nós langchain somem no
+import via SDK desta instância, e o Gemini free tier é de 20 req/dia. ModelScope
+serve chat, visão e edição de imagem com um único token e cota folgada. O preview é
+assíncrono com polling porque o Cloudflare corta conexões longas em ~100s.
 
-- Estrutura simples (lista com primitivos) — não justifica schema relacional.
-- Hive funciona em web sem FFI (SQLite/sqflite não funciona na web sem workarounds).
-- Um dos storages mais rápidos para Flutter em benchmarks de read/write.
-
-### Por que não usar Firebase Auth SDK completo?
-
-A autenticação é própria (n8n + JWT), não Firebase Auth. `firebase_core` +
-`firebase_auth` aumentariam o bundle ~2MB e duplicariam a camada de identidade
-que já existe no backend. O `google_sign_in` isolado cobre o OAuth2 do Google
-(o id_token é trocado por um JWT Raitõ no `POST /auth/google`) com muito menos
-dependências.
-
-### Por que sealed class para AuthState?
-
-```dart
-// Sem sealed class — fácil esquecer estados
-if (state.isLoading) { ... }
-if (state.isAuthenticated) { ... }
-// E o erro? E o estado inicial?
-
-// Com sealed class — exaustivo em compile time
-switch (state) {
-  case AuthLoading()                         => LoadingWidget(),
-  case Unauthenticated(:final errorMessage)  => ErrorWidget(errorMessage),
-  case Authenticated(:final user)            => HomeWidget(user),
-}
-```
-
-### Por que todas as rotas de perfil ficam dentro do ShellRoute?
-
-Rotas fora do `ShellRoute` não recebem o wrapper `MainShell`, então a bottom nav desaparece. A solução correta é colocar **todas** as rotas com bottom nav dentro do shell. Apenas login e registro ficam fora — intencionalmente, para criar a sensação de "modo dedicado" de autenticação.
-
-### Por que `rootNavigator: true` nos dialogs e loading modals?
-
-O `ShellRoute` introduz um navigator interno para suas páginas. `showDialog` empilha no navigator raiz. Se `Navigator.pop` não usa `rootNavigator: true`, ele tenta fechar a página do shell em vez do dialog — causando `!_debugLocked` assertion e navegação inesperada para a tela anterior.
-
-### Por que duas APIs de CEP (ViaCEP + BrasilAPI)?
-
-Nenhuma API pública tem 100% de uptime. ViaCEP e BrasilAPI têm infraestruturas independentes — a falha de uma raramente coincide com a da outra. Timeout de 6s por tentativa garante que o usuário não espera mais de 12s no pior caso.
-
-### Por que buscar dados do usuário Google via People API na web?
-
-O plugin `google_sign_in_web` usa o fluxo token OAuth2 (o fluxo `signIn()` é deprecated mas ainda funcional). Neste fluxo o SDK web não popula `email` e `displayName` no `GoogleSignInAccount` automaticamente. A solução é usar o `access_token` retornado para fazer uma chamada à People API — que já estava habilitada no projeto Firebase — e extrair os dados. Alternativa descartada: migrar para `renderButton` (mudaria completamente o fluxo de UX com botão nativo do Google).
+**Segurança "TCC".** JWT secret e API key estão hardcoded nos workflows, e o APK usa
+debug-signing. Aceitável para a entrega; trocar antes de um deploy real.
