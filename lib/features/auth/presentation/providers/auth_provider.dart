@@ -37,10 +37,18 @@ class AuthNotifier extends StateNotifier<AuthState> {
   final AuthRepository _repo;
   final dynamic _api; // ApiClient — guardado só pra registrar callback
 
+  // No Android o clientId NÃO deve ser passado: o plugin lê o OAuth client
+  // (tipo Android, SHA-1) do google-services.json. Passar o client web aqui faz
+  // o signIn() devolver idToken nulo / falhar. No Web o clientId é obrigatório
+  // (não há google-services.json), e o serverClientId garante que o idToken
+  // venha com a audience do client web, que é o que o backend valida.
+  static const _webClientId =
+      '250510478199-ntvbpl5sffki90u4k0lk3eseal8u8t0m.apps.googleusercontent.com';
+
   final _googleSignIn = GoogleSignIn(
-    scopes: ['email', 'profile'],
-    clientId:
-        '250510478199-ntvbpl5sffki90u4k0lk3eseal8u8t0m.apps.googleusercontent.com',
+    scopes: const ['email', 'profile'],
+    clientId: kIsWeb ? _webClientId : null,
+    serverClientId: kIsWeb ? null : _webClientId,
   );
 
   Future<void> _load() async {

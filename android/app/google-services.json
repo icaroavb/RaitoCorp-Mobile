@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "250510478199-ck2bbmf1ppkvl38o2m0jl61mgvq7vqpn.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.raitocorp_mobile",
+            "certificate_hash": "686ccd2f3d5e881153815b5e86966fb5e50ccb9c"
+          }
+        },
+        {
           "client_id": "250510478199-ntvbpl5sffki90u4k0lk3eseal8u8t0m.apps.googleusercontent.com",
           "client_type": 3
         }
