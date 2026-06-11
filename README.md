@@ -2,19 +2,47 @@
 
 > Loja de iluminação em **Flutter**, com backend **100% em n8n + Postgres** e um
 > **Consultor de Iluminação por IA** (chat, recomendação por foto e preview do
-> produto no seu ambiente). Trabalho de Conclusão de Curso.
+> produto no seu ambiente).
+>
+> 🎓 **Trabalho de Conclusão de Curso (TCC).** Projeto acadêmico que demonstra um
+> e-commerce mobile completo, ponta a ponta — do design de interface à
+> arquitetura de backend e à integração com modelos de IA generativa.
 
-```
-┌──────────────┐   HTTPS / JSON    ┌──────────────────────┐   SQL   ┌────────────┐
-│  App Flutter │  X-API-Key + JWT  │  n8n (webhooks)       │ ──────▶ │  Postgres  │
-│  (Android,   │ ───────────────▶  │  regras de negócio    │         │  (dados)   │
-│   iOS, Web)  │                   │  + auth em SQL        │ ◀────── │            │
-└──────────────┘                   └──────────┬───────────┘  result └────────────┘
-                                              │ HTTP
-                              ┌───────────────┼────────────────┐
-                              ▼               ▼                ▼
-                        Cloudinary       ModelScope        Google OAuth
-                       (imagens)       (Consultor IA)      (login social)
+```mermaid
+flowchart LR
+    subgraph client["📱 Cliente"]
+        APP["App Flutter<br/>Android · iOS · Web"]
+    end
+
+    subgraph backend["⚙️ Backend / Regras"]
+        N8N["n8n — 33 webhooks<br/>auth + regras em SQL"]
+    end
+
+    subgraph data["🗄️ Dados"]
+        PG[("PostgreSQL")]
+    end
+
+    subgraph external["🌐 Serviços externos"]
+        CLOUD["Cloudinary<br/>imagens"]
+        MS["ModelScope<br/>Consultor IA"]
+        GOO["Google OAuth<br/>login social"]
+    end
+
+    APP -- "HTTPS / JSON<br/>X-API-Key + JWT" --> N8N
+    N8N -- "SQL" --> PG
+    PG -. "result" .-> N8N
+    N8N --> CLOUD
+    N8N --> MS
+    APP --> GOO
+
+    classDef c fill:#F9F5EF,stroke:#111,color:#111
+    classDef b fill:#F5A623,stroke:#111,color:#111
+    classDef d fill:#111,stroke:#111,color:#fff
+    classDef e fill:#fff,stroke:#C47D0E,color:#111
+    class APP c
+    class N8N b
+    class PG d
+    class CLOUD,MS,GOO e
 ```
 
 O app **nunca** fala direto com o banco: toda leitura e escrita passa por
@@ -29,16 +57,17 @@ webhooks n8n, que concentram autenticação e regras de negócio sobre o Postgre
 3. [Stack e dependências](#stack-e-dependências)
 4. [Arquitetura do app (Flutter)](#arquitetura-do-app-flutter)
 5. [Backend (n8n + Postgres)](#backend-n8n--postgres)
-6. [Consultor de Iluminação por IA](#consultor-de-iluminação-por-ia)
-7. [Design system](#design-system)
-8. [Funcionalidades](#funcionalidades)
-9. [Autenticação](#autenticação)
-10. [Navegação](#navegação)
-11. [Persistência local](#persistência-local)
-12. [Integrações externas](#integrações-externas)
-13. [Estrutura de pastas](#estrutura-de-pastas)
-14. [Como rodar](#como-rodar)
-15. [Decisões técnicas](#decisões-técnicas)
+6. [Banco de dados (PostgreSQL)](#banco-de-dados-postgresql)
+7. [Consultor de Iluminação por IA](#consultor-de-iluminação-por-ia)
+8. [Design system](#design-system)
+9. [Funcionalidades](#funcionalidades)
+10. [Autenticação](#autenticação)
+11. [Navegação](#navegação)
+12. [Persistência local](#persistência-local)
+13. [Integrações externas](#integrações-externas)
+14. [Estrutura de pastas](#estrutura-de-pastas)
+15. [Como rodar](#como-rodar)
+16. [Decisões técnicas](#decisões-técnicas)
 
 ---
 
@@ -156,24 +185,169 @@ onboarding.
 
 ### Fluxo de dados (de cima a baixo)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Screens + Widgets        (UI declarativa)               │
-│        ▲ watch / read                                    │
-│  Riverpod Providers       (StateNotifier, estados)       │
-│        ▲                                                 │
-│  Repositories             (regra de chamada à API)       │
-│        ▲                                                 │
-│  ApiClient                (injeta X-API-Key + Bearer JWT,│
-│                            traduz status code → exceção) │
-│        ▲ HTTP                                            │
-│  Entities (domain)        (Dart puro, fromJson/toJson)   │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    UI["🖼️ Screens + Widgets<br/><i>UI declarativa</i>"]
+    PROV["🔄 Riverpod Providers<br/><i>StateNotifier · estados (loading/data/error)</i>"]
+    REPO["📦 Repositories<br/><i>monta a chamada à API por feature</i>"]
+    API["🔌 ApiClient<br/><i>injeta X-API-Key + Bearer JWT<br/>traduz status code → exceção tipada</i>"]
+    ENT["🧱 Entities (domain)<br/><i>Dart puro · fromJson / toJson</i>"]
+
+    UI -->|"watch / read"| PROV
+    PROV --> REPO
+    REPO --> API
+    API -->|"HTTP"| ENT
+    ENT -.->|"objetos tipados"| UI
+
+    classDef l fill:#F9F5EF,stroke:#C47D0E,color:#111
+    class UI,PROV,REPO,API,ENT l
 ```
 
 O `ApiClient` central (`lib/core/api/`) é o único ponto que monta requisições:
 injeta a `X-API-Key` e o `Bearer <JWT>`, e converte respostas de erro em exceções
 tipadas (`ValidationException`, `AuthException`...). A UI nunca vê HTTP cru.
+
+### Diagrama de classes — modelo de domínio
+
+As entidades em `lib/features/*/domain/entities/` são objetos Dart puros (sem
+dependência de Flutter), todas com `fromJson`/`toJson` para serialização contra a
+API n8n. Relações principais:
+
+```mermaid
+classDiagram
+    direction LR
+
+    class UserEntity {
+        +String email
+        +String name
+        +String initials
+        +bool isAdmin
+        +DateTime memberSince
+        +String? phone
+        +int loyaltyPoints
+        +fromJson() UserEntity
+        +toJson() Map
+    }
+
+    class AddressEntity {
+        +String id
+        +String label
+        +String street
+        +String number
+        +String city
+        +String state
+        +String zipCode
+        +bool isDefault
+    }
+
+    class ProductEntity {
+        +String id
+        +String name
+        +double price
+        +double? originalPrice
+        +List~String~ imageUrls
+        +LightTemperature lightTemperature
+        +BrightnessLevel brightnessLevel
+        +List~Room~ idealRooms
+        +int lumens
+        +int colorTemperatureK
+        +double rating
+        +bool isBestSeller
+        +ProductCategory category
+    }
+
+    class ReviewEntity {
+        +String id
+        +String authorName
+        +int rating
+        +String comment
+        +DateTime date
+        +Room? room
+        +bool hasPhoto
+    }
+
+    class OrderEntity {
+        +String id
+        +String userEmail
+        +OrderStatus status
+        +double subtotal
+        +double shipping
+        +double discount
+        +String paymentMethod
+        +bool reviewed
+        +total() double
+    }
+
+    class OrderItem {
+        +String productId
+        +String productName
+        +double price
+        +int quantity
+        +subtotal() double
+    }
+
+    class OrderTimelineEvent {
+        +String title
+        +DateTime? timestamp
+        +bool completed
+        +bool active
+    }
+
+    class CartItemEntity {
+        +String productId
+        +String productName
+        +double price
+        +int quantity
+        +subtotal() double
+    }
+
+    class AppNotification {
+        +String id
+        +AppNotificationType type
+        +String title
+        +String body
+        +bool read
+    }
+
+    class MessageEntity {
+        +String id
+        +MessageAuthor author
+        +MessageType type
+        +String? text
+        +String? imagePath
+        +List~String~ productRecommendations
+    }
+
+    UserEntity "1" --> "0..*" AddressEntity : possui
+    UserEntity "1" --> "0..*" OrderEntity : faz
+    UserEntity "1" --> "0..*" AppNotification : recebe
+    OrderEntity "1" *-- "1..*" OrderItem : contém
+    OrderEntity "1" *-- "0..*" OrderTimelineEvent : rastreia
+    OrderEntity "1" --> "1" AddressEntity : entrega em
+    OrderItem "*" ..> "1" ProductEntity : referencia
+    CartItemEntity "*" ..> "1" ProductEntity : snapshot de
+    ProductEntity "1" --> "0..*" ReviewEntity : avaliado por
+    MessageEntity "*" ..> "0..*" ProductEntity : recomenda
+```
+
+> `*--` (composição) = o filho não existe sem o pai (um `OrderItem` só faz sentido
+> dentro de um `OrderEntity`). `..>` (dependência) = referência fraca por id
+> (o `CartItemEntity` guarda um *snapshot* do produto, não o objeto inteiro).
+
+### Enums do domínio
+
+```mermaid
+classDiagram
+    direction TB
+    class LightTemperature { warm; neutral; cool }
+    class BrightnessLevel { soft; medium; intense }
+    class Room { bedroom; living; kitchen; bathroom; external; office; diningRoom }
+    class ProductCategory { pendant; lamp; wallLamp; spot; strip; floorLamp; smart }
+    class OrderStatus { confirmed; preparing; shipped; delivered; cancelled }
+    class AppNotificationType { order; promotion; system; review }
+    class MessageAuthor { user; bot }
+    class MessageType { text; image; productRecommendation }
+```
 
 ---
 
@@ -182,20 +356,29 @@ tipadas (`ValidationException`, `AuthException`...). A UI nunca vê HTTP cru.
 O n8n hospeda **33 workflows**, um por endpoint. Todos seguem a mesma topologia —
 entender um é entender todos:
 
-```
-Webhook (POST /rota)
-   │
-   ▼
-IF "Check X-API-Key" ──── inválida ────▶ Respond 401
-   │ válida
-   ▼
-Postgres (executeQuery)   ← valida o JWT em SQL e roda a regra numa CTE única,
-   │                        devolvendo { statusCode, body }
-   ▼
-IF "statusCode == 200" ── não ────────▶ Respond Err (422 / 404 / 401)
-   │ sim
-   ▼
-Respond 200 (body)
+```mermaid
+flowchart TD
+    WH["📥 Webhook<br/>POST /rota"]
+    K{"🔑 X-API-Key<br/>válida?"}
+    PG["🗄️ Postgres executeQuery<br/>valida JWT em SQL +<br/>regra de negócio numa CTE única<br/>→ { statusCode, body }"]
+    OK{"statusCode<br/>== 200?"}
+    R200["✅ Respond 200<br/>(body)"]
+    R401["⛔ Respond 401<br/>Invalid API key"]
+    RERR["⚠️ Respond Err<br/>422 / 404 / 401 + message"]
+
+    WH --> K
+    K -- "não" --> R401
+    K -- "sim" --> PG
+    PG --> OK
+    OK -- "não" --> RERR
+    OK -- "sim" --> R200
+
+    classDef ok fill:#DFF5E6,stroke:#2D7A4F,color:#111
+    classDef err fill:#FEE2E2,stroke:#DC2626,color:#111
+    classDef node fill:#F9F5EF,stroke:#C47D0E,color:#111
+    class R200 ok
+    class R401,RERR err
+    class WH,K,PG,OK node
 ```
 
 **A autenticação roda dentro do SQL.** A instância n8n é *hardened* e bloqueia
@@ -208,11 +391,169 @@ base64url, checar `exp`) são feitas **inteiramente em PostgreSQL** via a extens
 > [`docs/N8N_API.md`](docs/N8N_API.md). A explicação detalhada da arquitetura
 > (para a apresentação) está em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
 
-### Tabelas principais (Postgres)
+---
 
-`users` · `addresses` · `products` · `reviews` · `orders` · `order_items` ·
-`order_timeline` · `user_favorites` · `notifications` · `chat_sessions` ·
-`chat_messages` · `preview_usage`. Extensions: `pgcrypto`, `citext`.
+## Banco de dados (PostgreSQL)
+
+O Postgres é a única fonte de verdade dos dados. **Apenas o n8n acessa o banco** —
+o app nunca recebe uma linha crua nem conhece SQL. Extensions usadas:
+`pgcrypto` (UUID v4 + bcrypt via `crypt()`) e `citext` (e-mail case-insensitive).
+
+### Diagrama Entidade-Relacionamento (ER)
+
+```mermaid
+erDiagram
+    users ||--o{ addresses : "tem"
+    users ||--o{ orders : "faz"
+    users ||--o{ reviews : "escreve"
+    users ||--o{ notifications : "recebe"
+    users ||--o{ user_favorites : "favorita"
+    users ||--o{ chat_sessions : "inicia"
+    products ||--o{ reviews : "recebe"
+    products ||--o{ order_items : "vendido em"
+    products ||--o{ user_favorites : "favoritado em"
+    orders ||--|{ order_items : "contém"
+    orders ||--o{ order_timeline : "rastreado por"
+    orders }o--|| addresses : "entregue em"
+    chat_sessions ||--o{ chat_messages : "agrupa"
+
+    users {
+        uuid id PK
+        citext email UK
+        text name
+        text password_hash "bcrypt; NULL p/ só-Google"
+        text google_sub UK
+        text phone
+        date birth_date
+        bool is_admin
+        int loyalty_points
+        timestamptz created_at
+    }
+    addresses {
+        uuid id PK
+        uuid user_id FK
+        text label
+        text street
+        text number
+        text neighborhood
+        text city
+        char state
+        text zip_code
+        bool is_default
+    }
+    products {
+        uuid id PK
+        text name
+        text description
+        numeric price
+        numeric original_price
+        text_array image_urls
+        text light_temperature "warm|neutral|cool"
+        text brightness_level "soft|medium|intense"
+        text_array ideal_rooms
+        int lumens
+        int color_temperature_k
+        numeric rating
+        bool is_best_seller
+        text category
+        bool active
+    }
+    reviews {
+        uuid id PK
+        uuid product_id FK
+        uuid user_id FK
+        text author_name
+        int rating "1..5"
+        text comment
+        text room
+        bool has_photo
+    }
+    orders {
+        text id PK "short id ex 12847"
+        uuid user_id FK
+        text status "confirmed|preparing|shipped|delivered|cancelled"
+        uuid address_id FK
+        jsonb address_snapshot "endereço congelado"
+        numeric subtotal
+        numeric shipping
+        numeric discount
+        text payment_method
+        timestamptz estimated_delivery
+        bool reviewed
+    }
+    order_items {
+        uuid id PK
+        text order_id FK
+        uuid product_id FK
+        text product_name "snapshot"
+        numeric price
+        int quantity
+    }
+    order_timeline {
+        uuid id PK
+        text order_id FK
+        text title
+        timestamptz timestamp
+        bool completed
+        bool active
+        int position
+    }
+    user_favorites {
+        uuid user_id PK,FK
+        uuid product_id PK,FK
+    }
+    notifications {
+        uuid id PK
+        uuid user_id FK
+        text type "order|promotion|system|review"
+        text title
+        text body
+        bool read
+    }
+    chat_sessions {
+        text id PK
+        uuid user_id FK
+    }
+    chat_messages {
+        uuid id PK
+        text session_id FK
+        text author "user|bot"
+        text type "text|image|productRecommendation"
+        text text
+        text image_path
+        uuid_array product_recommendations
+    }
+```
+
+> **Notação:** `||` um · `o{` zero-ou-muitos · `|{` um-ou-muitos. `PK` chave
+> primária, `FK` estrangeira, `UK` única.
+
+### Papel de cada tabela
+
+| Tabela | Guarda | Observações de modelagem |
+|---|---|---|
+| `users` | Conta, perfil e pontos | `password_hash` é bcrypt (`pgcrypto`); `NULL` em contas só-Google. `email` é `citext` (case-insensitive). |
+| `addresses` | Endereços do usuário | Um marcado `is_default`. Auto-preenchidos por CEP no app. |
+| `products` | Catálogo | Arrays nativos do Postgres (`image_urls`, `ideal_rooms`, `tags`). `active=false` esconde sem deletar. |
+| `reviews` | Avaliações de produto | `rating` com `CHECK (1..5)`. `user_id` vira `NULL` se a conta for removida (preserva histórico). |
+| `orders` | Pedido | `id` é short id legível. **`address_snapshot` (JSONB)** congela o endereço no momento da compra — se o usuário editar/apagar o endereço depois, o pedido antigo não muda. |
+| `order_items` | Linhas do pedido | `product_name`/`price` são **snapshot** — preço histórico não muda quando o catálogo muda. |
+| `order_timeline` | Status passo a passo | Ordenado por `position`; alimenta a timeline vertical da tela de detalhe. |
+| `user_favorites` | Relação N:N user↔produto | PK composta evita duplicata; toggle é `INSERT ... ON CONFLICT DO DELETE`. |
+| `notifications` | Avisos do usuário | `read` controla o badge do sino. |
+| `chat_sessions` | Conversa do consultor | `id` gerado pelo app (Hive) e reusado entre aberturas. |
+| `chat_messages` | Turnos do chat | `product_recommendations` é array de UUIDs de produtos sugeridos pela IA. |
+
+> O schema `CREATE TABLE` completo (com índices e tipos exatos) está na §2 de
+> [`docs/N8N_API.md`](docs/N8N_API.md).
+
+### Por que *snapshots* (denormalização proposital)?
+
+`orders.address_snapshot` e `order_items.product_name/price/image_url` duplicam
+dados que já existem em `addresses`/`products`. **É intencional:** um pedido é um
+documento histórico. Se o produto mudar de preço ou o endereço for apagado, a nota
+do pedido precisa continuar mostrando o que foi realmente comprado e para onde foi
+enviado. Normalizar quebraria essa garantia.
 
 ---
 
@@ -234,15 +575,38 @@ A geração de imagem leva 2-4 minutos, mas o Cloudflare na frente do n8n corta
 conexões síncronas em ~100s (erro 524). A solução é um fluxo assíncrono no mesmo
 endpoint, decidido por um `IF "Tem task_id?"`:
 
-```
-1ª chamada (sem task_id):  valida auth+limite+fontes → submete ao ModelScope
-                           → responde { status: processing, task_id } em ~3s
-        │
-        ▼ (app reenvia o task_id a cada 30s, até 5 min)
-Polling (com task_id):     consulta o status no ModelScope
-                           ├─ SUCCEED → sobe pro Cloudinary, salva, responde ready
-                           ├─ FAILED  → re-submete e devolve novo task_id
-                           └─ senão   → processing
+```mermaid
+sequenceDiagram
+    autonumber
+    participant APP as App Flutter
+    participant N8N as n8n /consultant/preview
+    participant MS as ModelScope
+    participant CL as Cloudinary
+
+    Note over APP,N8N: 1ª chamada — sem task_id
+    APP->>N8N: POST { session_id, product_id }
+    N8N->>N8N: valida auth + limite (2/dia) + fontes
+    N8N->>MS: submete geração de imagem
+    MS-->>N8N: task_id
+    N8N-->>APP: { status: "processing", task_id } (~3s)
+
+    Note over APP,N8N: Polling — reenvia task_id a cada 30s (até 5 min)
+    loop até pronto ou timeout
+        APP->>N8N: POST { session_id, product_id, task_id }
+        N8N->>MS: consulta status do task_id
+        alt SUCCEED
+            MS-->>N8N: imagem gerada
+            N8N->>CL: sobe a imagem
+            CL-->>N8N: URL pública
+            N8N-->>APP: { status: "ready", image_url }
+        else FAILED
+            N8N->>MS: re-submete
+            MS-->>N8N: novo task_id
+            N8N-->>APP: { status: "processing", task_id }
+        else ainda processando
+            N8N-->>APP: { status: "processing" }
+        end
+    end
 ```
 
 O `session_id` é persistido no app (Hive), então um preview que terminou com o app
@@ -362,6 +726,32 @@ sealed class AuthState {
 **Por que sealed class?** O `switch` é exaustivo em tempo de compilação —
 impossível esquecer de tratar o loading ou o erro.
 
+### Sequência — login email/senha
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Usuário
+    participant APP as App Flutter
+    participant N8N as n8n /auth/login
+    participant PG as PostgreSQL
+
+    U->>APP: e-mail + senha
+    APP->>N8N: POST /auth/login<br/>(X-API-Key, body)
+    N8N->>N8N: IF X-API-Key válida?
+    N8N->>PG: SELECT user WHERE email=$1<br/>+ crypt(senha) == password_hash
+    alt credencial válida
+        PG-->>N8N: user + assina JWT (HS256, 7d) em SQL
+        N8N-->>APP: 200 { token, user }
+        APP->>APP: salva JWT no secure_storage
+        APP-->>U: navega para Home (Authenticated)
+    else inválida
+        PG-->>N8N: statusCode 401
+        N8N-->>APP: 401 { message }
+        APP-->>U: "E-mail ou senha incorretos"
+    end
+```
+
 - **Email/senha:** `POST /auth/login` valida a senha (bcrypt via `pgcrypto`) e
   devolve um JWT HS256 (TTL 7 dias). O token vai pro `flutter_secure_storage`; a
   sessão é reidratada via `GET /me` na inicialização.
@@ -381,19 +771,43 @@ impossível esquecer de tratar o loading ou o erro.
 
 GoRouter com `ShellRoute` para bottom nav persistente:
 
-```
-GoRouter
-├── ShellRoute (MainShell — bottom nav persistente)
-│   ├── /home
-│   ├── /products  └── :id
-│   ├── /consultant
-│   ├── /cart
-│   ├── /profile   ├── /orders └── :id
-│   │              ├── /favorites · /reviews · /addresses
-│   │              ├── /my-data  · /notifications
-│   ├── /checkout  └── /success/:orderId
-├── /login     (fora do shell — modo dedicado)
-└── /register  (fora do shell)
+```mermaid
+flowchart TD
+    ROOT["GoRouter"]
+    SHELL["ShellRoute<br/>(MainShell — bottom nav persistente)"]
+    LOGIN["/login<br/><i>fora do shell</i>"]
+    REG["/register<br/><i>fora do shell</i>"]
+
+    HOME["/home"]
+    PROD["/products"]
+    PRODID["/products/:id"]
+    CONS["/consultant"]
+    CART["/cart"]
+    PROF["/profile"]
+    ORD["/profile/orders"]
+    ORDID["/profile/orders/:id"]
+    SUB["/favorites · /reviews · /addresses<br/>/my-data · /notifications"]
+    CHK["/checkout"]
+    SUC["/checkout/success/:orderId"]
+
+    ROOT --> SHELL
+    ROOT --> LOGIN
+    ROOT --> REG
+    SHELL --> HOME
+    SHELL --> PROD --> PRODID
+    SHELL --> CONS
+    SHELL --> CART
+    SHELL --> PROF
+    PROF --> ORD --> ORDID
+    PROF --> SUB
+    SHELL --> CHK --> SUC
+
+    classDef shell fill:#F5A623,stroke:#111,color:#111
+    classDef out fill:#111,stroke:#111,color:#fff
+    classDef page fill:#F9F5EF,stroke:#C47D0E,color:#111
+    class SHELL shell
+    class LOGIN,REG out
+    class HOME,PROD,PRODID,CONS,CART,PROF,ORD,ORDID,SUB,CHK,SUC page
 ```
 
 - **Tudo com bottom nav fica dentro do shell**; só login/registro ficam fora
